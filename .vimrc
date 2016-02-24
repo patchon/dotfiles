@@ -17,6 +17,9 @@ map ÅÅ :call SeeTabs()<cr>
 " Toggle spell checking,
 map ää :setlocal spell!<cr>
 
+" Never do sudo vim again,
+cmap w!! w !sudo tee %
+
 " Not really sure,
 scriptencoding utf-8
 
