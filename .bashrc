@@ -85,9 +85,6 @@ alias pubip="dig +short myip.opendns.com @resolver1.opendns.com"
 alias localip="sudo ifconfig | grep -Eo 'inet (addr:)?([0-9]*\.){3}[0-9]*' | grep -Eo '([0-9]*\.){3}[0-9]*' | grep -v '127.0.0.1'"
 alias ips="sudo ifconfig -a | grep -o 'inet6\? \(addr:\)\?\s\?\(\(\([0-9]\+\.\)\{3\}[0-9]\+\)\|[a-fA-F0-9:]\+\)' | awk '{ sub(/inet6? (addr:)? ?/, \"\"); print }'"
 
-# Flush Directory Service cache
-alias flush="dscacheutil -flushcache && killall -HUP mDNSResponder"
-
 # View HTTP traffic
 alias sniff="sudo ngrep -d 'en1' -t '^(GET|POST) ' 'tcp and port 80'"
 alias httpdump="sudo tcpdump -i en1 -n -s 0 -w - | grep -a -o -E \"Host\: .*|GET \/.*\""
@@ -116,4 +113,49 @@ man() {
 		LESS_TERMCAP_ue=$(printf "\e[0m") \
 		LESS_TERMCAP_us=$(printf "\e[1;32m") \
 		man "$@"
+}
+
+kill_all_fucking_chrome_tabs(){
+  ps ux                                             |
+  grep '/opt/google/chrome/chrome --type=renderer'  |
+  grep -v extension-process                         |
+  tr -s ' '                                         |
+  cut -d ' ' -f2                                    |
+  xargs kill
+}
+
+check_port(){
+
+  local host=${1%:*}
+  local port=${1#*:}
+  local colon="${1//[^:]}"
+  local re_num='^[0-9]+$'
+  local err=0
+
+  if [[ ${#colon} -ne 1 ]];then
+    echo -e " \n Usage :"
+    echo -e "  check_port addr:port \n"
+    return
+  fi
+
+  if [[ -z $host ]];then
+    echo "\n Missing host" && err=1
+  fi
+
+  if [[ ! $port ]]; then
+    echo "\n Port missing" && err=1
+  fi
+
+  if ! [[ $port =~ $re_num  ]];then
+    echo -e " \n Port invalid, number expected ($port)" && err=1
+  fi
+
+  if [[ $err -ne 0 ]]; then
+    echo -e " \n Usage :"
+    echo -e "  check_port addr:port \n"
+    return
+  fi
+
+  (echo > /dev/tcp/$host/$port) >/dev/null 2>&1 \
+    && echo "Yes connection." || echo "No connection."
 }
