@@ -32,7 +32,6 @@ export HISTFILESIZE=50000
 export HISTSIZE=10000
 export GREP_COLORS='31'
 export EDITOR='vim'
-export GREP_OPTIONS='--color=auto'
 
 shopt -s checkwinsize
 shopt -s histappend
@@ -42,8 +41,8 @@ alias ll='ls -ahlF --color=auto'
 alias gvim='gvim -p'
 alias sortera="du -h | grep -e '[0-9][0-9][M|G]' | sort -n"
 alias dun="du -ah | grep -E \"[0-9]*[0-9][M|G][^a-z|0-9]\" | sort -n"
-alias agrep="grep --exclude-dir=.svn --exclude=*.swp --exclude-dir=DEV --exclude-dir=named -ri $1"
-alias grep="/bin/grep $GREP_OPTIONS"
+alias agrep="/bin/grep --color=auto --exclude-dir=.svn --exclude=*.swp --exclude-dir=DEV --exclude-dir=named -ri $1"
+alias grep="/bin/grep --color=auto"
 
 # Bash completion.
 if [ -t 0 ]; then   # only run if stdin is a terminal
@@ -158,4 +157,14 @@ check_port(){
 
   (echo > /dev/tcp/$host/$port) >/dev/null 2>&1 \
     && echo "Yes connection." || echo "No connection."
+}
+
+convert_to_utf(){
+  if ! [[ $1 ]]; then
+    echo -e " \n Usage :"
+    echo -e "  convert_to_utf file_to_convert $1\n"
+    return
+  fi
+
+  vim +"set nobomb | set fenc=utf8 | x" $1
 }
