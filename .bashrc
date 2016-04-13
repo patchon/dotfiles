@@ -77,6 +77,30 @@ if ! shopt -oq posix; then
 fi
 
 
+
+# Source gitprompt,
+source ~/.bash-git-prompt/gitprompt.sh
+GIT_PROMPT_ONLY_IN_REPO=1
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # Testing new hipster stuff,
 
 # IP addresses

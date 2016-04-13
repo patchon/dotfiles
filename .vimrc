@@ -83,7 +83,7 @@ augroup configgroup
 augroup END
 
 " Activate spell checking,
-setlocal spell!
+"setlocal spell!
 
 " Playing with themes,
 colorscheme badwolf
