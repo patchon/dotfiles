@@ -79,8 +79,10 @@ fi
 
 
 # Source gitprompt,
-source ~/.bash-git-prompt/gitprompt.sh
-GIT_PROMPT_ONLY_IN_REPO=1
+if [[ -f ~/.bash-git-prompt/gitprompt.sh ]]; then
+  source ~/.bash-git-prompt/gitprompt.sh
+  GIT_PROMPT_ONLY_IN_REPO=1
+fi
 
 
 
