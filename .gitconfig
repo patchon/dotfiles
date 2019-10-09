@@ -59,8 +59,8 @@
   default = upstream
 
 [user]
-    email = martinsson.patrik@gmail.com
-    name = patchon
+  email = martinsson.patrik@gmail.com
+  name = patchon
 
 [sendemail]
   smtpserver = smtp.gmail.com
