@@ -1,0 +1,70 @@
+[core]
+  excludesfile  = "~/.gitignore"
+  editor        = vim
+  autcrlf       = input
+  whitespace    = cr-at-eol
+  pager         = diff-highlight | less -R
+
+[alias]
+  b       = branch -vv
+  ci      = commit -v
+  commit  = commit -v
+  co      = checkout
+  st      = status
+  unstage = reset HEAD --
+
+[merge]
+  tool = p4merge
+  keepBackup = false
+  conflictstyle = diff3
+
+[mergetool]
+  prompt = false
+  keepBackup = false
+
+[mergetool "p4merge"]
+  trustExitCode = true
+
+[pager]
+  show = diff-highlight | less -R
+  diff = diff-highlight | less -R
+
+[diff]
+  renames = true
+  tool = p4merge
+
+[color]
+  ui = always
+  branch = auto
+  diff = auto
+  status = auto
+
+[color "branch"]
+  current = yellow reverse
+  local = yellow
+  remote = green
+
+[color "diff"]
+  meta = blue
+  frag = magenta
+  old = red
+  new = green
+
+[color "status"]
+  added = green
+  changed = blue
+  untracked = yellow
+
+[push]
+  default = upstream
+
+[user]
+    email = martinsson.patrik@gmail.com
+    name = patchon
+
+[sendemail]
+  smtpserver = smtp.gmail.com
+  smtpserverport = 587
+  smtpencryption = tls
+  smtpuser = martinsson.patrik@gmail.com
+  from = martinsson.patrik@gmail.com

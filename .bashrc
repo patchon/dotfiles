@@ -7,12 +7,9 @@ esac
 [[ -f /etc/bashrc ]]          && source /etc/bashrc
 [[ -f /etc/bash_completion ]] && source /etc/bash_completion
 
-export PATH="/home/patrikma/bin"
-export PATH="${PATH}:/sbin"
-export PATH="${PATH}:/usr/bin"
-export PATH="${PATH}:/usr/local/bin"
-export PATH="${PATH}:/usr/local/sbin"
-export PATH="${PATH}:/usr/sbin"
+export PATH="/usr/local/android-studio/jre/bin/:${PATH}"
+export PATH="${HOME}/.gradle/wrapper/dists/gradle-5.4.1-all/3221gyojl5jsh0helicew7rwx/gradle-5.4.1/bin/:${PATH}"
+export ANDROID_SDK_ROOT=${HOME}/Android/Sdk
 
 export EDITOR='vim'
 export GREP_COLORS='31'
@@ -28,7 +25,6 @@ alias agrep="/bin/grep --color=auto --exclude-dir=.svn --exclude=*.swp --exclude
 alias grep="/bin/grep --color=auto"
 alias kssh="export KRB5_TRACE=/dev/stderr; ssh $1"
 
-
 # Bash completion.
 if [[ -t 0 ]]; then   # only run if stdin is a terminal
   bind "set completion-ignore-case on"
@@ -39,10 +35,9 @@ if [[ -t 0 ]]; then   # only run if stdin is a terminal
   stty -ctlecho
 fi
 
-
 # Source pureline,
 if [[ -f ~/dotfiles/pureline ]]; then
-  source ~/dotfiles/pureline
+  source ~/dotfiles/pureline ~/dotfiles/.pureline.conf
 fi
 
 
@@ -54,23 +49,23 @@ alias httpdump="sudo tcpdump -i en1 -n -s 0 -w - | grep -a -o -E \"Host\: .*|GET
 
 # Use Git’s colored diff when available
 hash git &>/dev/null
-if [ $? -eq 0 ]; then
-	diff() {
-		git diff --no-index --color-words "$@"
-	}
+if [[ $? -eq 0 ]]; then
+  diff() {
+    git diff --no-index --color-words "$@"
+  }
 fi
 
 # Get colors in manual pages
 man() {
-	env \
-		LESS_TERMCAP_mb=$(printf "\e[1;31m") \
-		LESS_TERMCAP_md=$(printf "\e[1;31m") \
-		LESS_TERMCAP_me=$(printf "\e[0m") \
-		LESS_TERMCAP_se=$(printf "\e[0m") \
-		LESS_TERMCAP_so=$(printf "\e[1;44;33m") \
-		LESS_TERMCAP_ue=$(printf "\e[0m") \
-		LESS_TERMCAP_us=$(printf "\e[1;32m") \
-		man "$@"
+  env                                       \
+    LESS_TERMCAP_mb=$(printf "\e[1;31m")    \
+    LESS_TERMCAP_md=$(printf "\e[1;31m")    \
+    LESS_TERMCAP_me=$(printf "\e[0m")       \
+    LESS_TERMCAP_se=$(printf "\e[0m")       \
+    LESS_TERMCAP_so=$(printf "\e[1;44;33m") \
+    LESS_TERMCAP_ue=$(printf "\e[0m")       \
+    LESS_TERMCAP_us=$(printf "\e[1;32m")    \
+    man "$@"
 }
 
 check_port(){
