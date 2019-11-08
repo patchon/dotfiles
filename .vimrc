@@ -11,9 +11,6 @@ map qq :w!<cr>
 " Toggle long lines highlighting,
 map åå :call ShowLongLines()<cr>
 
-" Toggle spaces/tabs highlighting,
-map ÅÅ :call SeeTabs()<cr>
-
 " Toggle spell checking,
 map ää :setlocal spell!<cr>
 
@@ -41,7 +38,7 @@ set linebreak             " Line break
 set magic                 " For regular expressions turn magic on
 set mat=2                 " How many 10ths of a second to blink when matching brackets
 set number                " Always show number-row
-set paste                 " Always paste mode
+" set paste                 " Always paste mode
 set ruler                 " Always show current position
 set shiftwidth=2          " Number of spaces to use when indenting
 set showmatch             " Show matching brackets when text indicator is over them
@@ -55,8 +52,11 @@ set wrap                  " Line break
 set wildmenu              " visual auto complete for command menu
 set backup
 set writebackup
+set backupdir^=$HOME/.cache//
+set directory^=$HOME/.cache//
+set undodir^=$HOME/.cache//
 
-" Highlight pattern for tabs and dangling spaces,
+" Highlight pattern dangling spaces,
 :highlight ExtraWhitespace ctermbg=darkgreen guibg=lightgreen
 :match ExtraWhitespace /\s\+$\| \+\ze\t/
 
@@ -69,7 +69,7 @@ autocmd BufReadPost *
 " Some magic,
 augroup configgroup
   autocmd!
-  autocmd BufWritePre * :call <SID>StripTrailingWhitespaces()
+  autocmd BufWritePre * :call StripTrailingWhitespaces()
   autocmd BufEnter Makefile setlocal noexpandtab
 augroup END
 
@@ -85,38 +85,31 @@ let g:badwolf_tabline = 3
 " Turn on CSS properties highlighting
 let g:badwolf_css_props_highlight = 1
 
-
+" Tabs
+highlight SpecialKey ctermfg=red
+set list
+set listchars=tab:..,trail:_,extends:>,precedes:<,nbsp:~
 
 
 "
 " Functions
 "
+" Toggle red indicator at 80 chars
+let s:color_column_toggle = 0
+highlight ColorColumn ctermfg=red ctermbg=233
 
-" Function to toggle high lightning on long lines,
 function! ShowLongLines()
-  if exists('w:long_line_match')
-    silent! call matchdelete(w:long_line_match)
-    unlet w:long_line_match
-  elseif &textwidth > 0
-    let w:long_line_match = matchadd('ErrorMsg', '\%>'.&tw.'v.\+', -1)
-  else
-    let w:long_line_match = matchadd('ErrorMsg', '\%>80v.\+', -1)
-  endif
-endfunc
-
-" Function to toggle between showing tabs and dangling spaces,
-function! SeeTabs()
-  if !exists("g:SeeTabEnabled")
-    let g:SeeTabEnabled = 1
-    silent! match ExtraWhitespace /\s\+$\| \+\ze\t/
-  else
-    unlet g:SeeTabEnabled
-    silent match ExtraWhitespace /uraynmyq/
-  endif
-endfunc
+    if s:color_column_toggle == 0
+      let w:m1 = matchadd('ColorColumn', '\%81v')
+      let s:color_column_toggle = 1
+    else
+      call matchdelete(w:m1)
+      let s:color_column_toggle = 0
+    endif
+endfunction
 
 " Removes dangling spaces, called on buffer write in the autogroup above.
-function! <SID>StripTrailingWhitespaces()
+function! StripTrailingWhitespaces()
     " save last search & cursor position
     let _s=@/
     let l = line(".")
@@ -128,4 +121,3 @@ endfunction
 
 " Call these at startup,
 call ShowLongLines()
-call SeeTabs()
