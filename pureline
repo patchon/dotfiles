@@ -1,6 +1,6 @@
 #!/bin/env bash
 
-# PureLine - A Pure Bash Powerline PS1 Command Prompt 
+# PureLine - A Pure Bash Powerline PS1 Command Prompt
 
 # -----------------------------------------------------------------------------
 # returns a string with the powerline symbol for a section end
@@ -33,7 +33,12 @@ function section_content {
 #------------------------------------------------------------------------------
 # Helper function for User & ssh modules
 function ip_address {
-    echo "$(ip route get 1 | tr -s ' ' | cut -d' ' -f7)"
+    if [[ ${3} == "" ]]; then
+      ip_ro=$(ip route get 1 | tr -s ' ' | cut -d' ' -f7)
+      echo "$(curl -s -m 10 https://ifconfig.me || echo LOCAL ${ip_ro})"
+    else
+      echo "${3}"
+    fi
 }
 
 #------------------------------------------------------------------------------
@@ -75,7 +80,7 @@ function user_module {
     # Show host if true or when user is remote/root
     if [ "$PL_USER_SHOW_HOST" = true ]; then
         if [ "$PL_USER_USE_IP" = true ]; then
-            content+="@$(ip_address)"
+            content+="@$(ip_address $@)"
         else
             content+="@\h"
         fi
@@ -99,7 +104,7 @@ function ssh_module {
         local content="${PL_SYMBOLS[ssh]}"
         if [ "$PL_SSH_SHOW_HOST" = true ]; then
             if [ "$PL_SSH_USE_IP" = true ]; then
-                content+=" $(ip_address)"
+                content+=" $(ip_address $@)"
             else
                 content+=" \h"
             fi
@@ -350,11 +355,23 @@ function kubernetes_module {
 # -----------------------------------------------------------------------------
 function pureline_ps1 {
     __return_code=$?    # save the return code
+
+    # Hack to cache ip,
+    local my_ip=""
+    if [[ ${PS1} =~ "SSH" ]]; then
+      my_ip="$(echo ${PS1} | grep -oe 'SSH | [0-9.]*' | cut -d ' ' -f3)"
+    fi
+
     PS1=""              # reset the command prompt
 
     # load the modules
     for module in "${!PL_MODULES[@]}"; do
-        ${PL_MODULES[$module]}
+        # ssh module is index 1
+        if [[ ${module} == 1 ]]; then
+          ${PL_MODULES[$module]} "${my_ip}"
+        else
+          ${PL_MODULES[$module]}
+        fi
     done
 
     # final end point
@@ -447,7 +464,7 @@ fi
 # grab a snapshot of the systems PROMPT_COMMAND. this can then be
 # appended to pureline when sourced without continually appending
 # pureline to itself.
-if [ -z "$__PROMPT_COMMAND" ]; then 
+if [ -z "$__PROMPT_COMMAND" ]; then
     __PROMPT_COMMAND="$PROMPT_COMMAND"
 fi
 
