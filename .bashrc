@@ -13,9 +13,18 @@ export ANDROID_SDK_ROOT=${HOME}/Android/Sdk
 
 export EDITOR='vim'
 export GREP_COLORS='31'
-export HISTCONTROL=ignoreboth
+
+# Magical history handling,
+# export HISTTIMEFORMAT="%Y-%m-%d %T "
 export HISTFILESIZE=-1
 export HISTSIZE=-1
+HISTCONTROL=ignoredups:erasedups
+shopt -s histappend
+function historymerge {
+  history -n; history -w; history -c; history -r;
+}
+trap historymerge EXIT
+PROMPT_COMMAND="history -a; $PROMPT_COMMAND"
 
 # Some aliases.
 alias ll='ls -ahlF --color=auto'
