@@ -7,9 +7,10 @@ esac
 [[ -f /etc/bashrc ]]          && source /etc/bashrc
 [[ -f /etc/bash_completion ]] && source /etc/bash_completion
 
-export PATH="/usr/local/android-studio/jre/bin/:${PATH}"
+export PATH="/usr/share/android-studio/jre/bin/:${PATH}"
 export PATH="${HOME}/.gradle/wrapper/dists/gradle-5.4.1-all/3221gyojl5jsh0helicew7rwx/gradle-5.4.1/bin/:${PATH}"
 export ANDROID_SDK_ROOT=${HOME}/Android/Sdk
+export ANDROID_HOME=${HOME}/Android/Sdk
 
 export EDITOR='vim'
 export GREP_COLORS='31'
