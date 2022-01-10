@@ -33,9 +33,12 @@ PROMPT_COMMAND="history -a; $PROMPT_COMMAND"
 alias ll='ls -ahlF --color=auto'
 alias gvim='gvim -p'
 alias dun="du -ah | grep -E \"[0-9]*[0-9][M|G][^a-z|0-9]\" | sort -n"
-alias agrep="/bin/grep --color=auto --exclude-dir=.svn --exclude=*.swp --exclude-dir=DEV --exclude-dir=named -ri $1"
-alias grep="/bin/grep --color=auto"
+alias agrep="/usr/bin/grep --color=auto --exclude-dir=.svn --exclude=*.swp --exclude-dir=DEV --exclude-dir=named -ri $1"
+alias grep="/usr/bin/grep --color=auto"
 alias kssh="export KRB5_TRACE=/dev/stderr; ssh $1"
+
+export CLICOLOR=1
+export LSCOLORS=ExGxBxDxCxEgEdxbxgxcxd
 
 # Bash completion.
 if [[ -t 0 ]]; then   # only run if stdin is a terminal

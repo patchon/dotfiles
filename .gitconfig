@@ -3,7 +3,7 @@
   editor        = vim
   autcrlf       = input
   whitespace    = cr-at-eol
-  pager         = diff-highlight | less -R
+  pager         = $(brew --prefix git)/share/git-core/contrib/diff-highlight/diff-highlight | less -R
 
 [alias]
   b       = branch -vv
@@ -26,8 +26,8 @@
   trustExitCode = true
 
 [pager]
-  show = diff-highlight | less -R
-  diff = diff-highlight | less -R
+  show = $(brew --prefix git)/share/git-core/contrib/diff-highlight/diff-highlight | less -R
+  diff = $(brew --prefix git)/share/git-core/contrib/diff-highlight/diff-highlight | less -R
 
 [diff]
   renames = true
