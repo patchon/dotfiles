@@ -60,7 +60,7 @@
 
 [user]
   email = martinsson.patrik@gmail.com
-  name = patchon
+  name = "Patrik Martinsson"
 
 [sendemail]
   smtpserver = smtp.gmail.com
