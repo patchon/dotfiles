@@ -4,6 +4,7 @@
   autcrlf       = input
   whitespace    = cr-at-eol
   pager         = diff-highlight | less -R
+  ignoreCase    = false
 
 [alias]
   b       = branch -vv
@@ -59,12 +60,13 @@
   default = upstream
 
 [user]
-  email = martinsson.patrik@gmail.com
+  email = patrik@redlin.se
   name = "Patrik Martinsson"
+  signingkey = 6E1DE566
 
-[sendemail]
-  smtpserver = smtp.gmail.com
-  smtpserverport = 587
-  smtpencryption = tls
-  smtpuser = martinsson.patrik@gmail.com
-  from = martinsson.patrik@gmail.com
+[commit]
+  gpgSign = true
+[tag]
+  gpgSign = true
+[gpg]
+  program = /opt/homebrew/bin/gpg
