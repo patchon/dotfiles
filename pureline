@@ -298,8 +298,9 @@ function set_default_colors() {
         [White]='\[\e[0;37m\]'        # White
 
         [Green1]='\[\e[38;5;065m\]'
-        [Blue2]='\[\e[38;5;069m\]'
-        [Blue3]='\[\e[38;5;111m\]'
+        [Green2]='\[\e[38;5;035m\]'
+        [Blue1]='\[\e[38;5;069m\]'
+        [Blue2]='\[\e[38;5;111m\]'
         [Orange]='\[\e[38;5;208m\]'
         [Purple1]='\[\e[38;5;095m\]'
         # [Purple1]='\[\e[38;5;127m\]'
@@ -317,8 +318,9 @@ function set_default_colors() {
         [On_White]='\[\e[47m\]'       # White
 
         [On_Green1]='\[\e[48;5;065m\]'
-        [On_Blue2]='\[\e[48;5;069m\]'
-        [On_Blue3]='\[\e[48;5;111m\]'
+        [On_Green2]='\[\e[48;5;035m\]'
+        [On_Blue1]='\[\e[48;5;069m\]'
+        [On_Blue2]='\[\e[48;5;111m\]'
         [On_Orange]='\[\e[48;5;208m\]'
         [On_Purple1]='\[\e[48;5;095m\]'
         # [On_Purple1]='\[\e[48;5;171m\]'
@@ -408,11 +410,11 @@ function git_segment {
         local number_behind="${number_behind_ahead% *}"
               number_behind="${number_behind_ahead%$'\t'*}"
 
-        if [ ! "$number_ahead" -eq 0 ] || [ ! "$number_behind" -eq 0 ]; then
-            if [ ! "$number_ahead" -eq 0 ]; then
+        if [ ! "0$number_ahead" -eq 0 ] || [ ! "0$number_behind" -eq 0 ]; then
+            if [ ! "0$number_ahead" -eq 0 ]; then
                 content+=" ${PL_SYMBOLS[soft_separator]} ${PL_SYMBOLS[git_ahead]}$number_ahead"
             fi
-            if [ ! "$number_behind" -eq 0 ]; then
+            if [ ! "0$number_behind" -eq 0 ]; then
                 content+=" ${PL_SYMBOLS[soft_separator]} ${PL_SYMBOLS[git_behind]}$number_behind"
             fi
         fi
