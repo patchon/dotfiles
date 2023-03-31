@@ -7,7 +7,12 @@ esac
 [[ -f /etc/bashrc ]]          && source /etc/bashrc
 [[ -f /etc/bash_completion ]] && source /etc/bash_completion
 
-export ANDROID_SDK_ROOT=${HOME}/Android/Sdk
+# Set PATH, MANPATH, etc., for Homebrew.
+eval "$(/opt/homebrew/bin/brew shellenv)"
+
+alias ss='netstat -anvp tcp'
+
+export ANDROID_SDK_ROOT=${HOME}/android/
 export ANDROID_HOME=${ANDROID_SDK_ROOT}
 export GOPATH=${HOME}/go
 export PATH="${ANDROID_SDK_ROOT}/platform-tools/:${PATH}"
@@ -33,8 +38,8 @@ PROMPT_COMMAND="history -a; $PROMPT_COMMAND"
 alias ll='ls -ahlF --color=auto'
 alias gvim='gvim -p'
 alias dun="du -ah | grep -E \"[0-9]*[0-9][M|G][^a-z|0-9]\" | sort -n"
-alias agrep="/bin/grep --color=auto --exclude-dir=.svn --exclude=*.swp --exclude-dir=DEV --exclude-dir=named -ri $1"
-alias grep="/bin/grep --color=auto"
+alias agrep="/usr/bin/grep --color=auto --exclude-dir=.svn --exclude=*.swp --exclude-dir=DEV --exclude-dir=named -ri $1"
+alias grep="/usr/bin/grep --color=auto"
 alias kssh="export KRB5_TRACE=/dev/stderr; ssh $1"
 
 # Bash completion.
@@ -52,6 +57,8 @@ if [[ -f ~/dotfiles/pureline ]]; then
   source ~/dotfiles/pureline ~/dotfiles/.pureline.conf
 fi
 
+gpg-connect-agent /bye
+export GPG_TTY=$(tty)
 
 # Random, kinda not used,
 
@@ -115,3 +122,4 @@ check_port(){
   (echo > /dev/tcp/$host/$port) >/dev/null 2>&1 \
     && echo "Yes connection." || echo "No connection."
 }
+
