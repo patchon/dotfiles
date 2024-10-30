@@ -8,7 +8,51 @@ esac
 [[ -f /etc/bash_completion ]] && source /etc/bash_completion
 
 # Set PATH, MANPATH, etc., for Homebrew.
-eval "$(/opt/homebrew/bin/brew shellenv)"
+if [[ $(uname -s) == Darwin* ]];then
+  eval "$(/opt/homebrew/bin/brew shellenv)"
+  pinentry=$(echo $(brew --prefix)/bin/pinentry-mac)
+  gpg=$(echo $(brew --prefix)/bin/gpg)
+else
+  pinentry=$(which pinentry)
+  gpg=$(which gpg)
+  gitdiff="/usr/share/git-core/contrib/diff-highlight"
+fi
+
+for dir in .cache .gnupg; do
+  if ! [[ -d ${HOME}/${dir} ]]; then
+    mkdir -v ${HOME}/${dir}
+
+    if [[ "${dir}" == ".gnupg" ]]; then
+      chmod 700 "${dir}"
+    fi
+  fi
+done
+
+for file in gpg.conf gpg-agent.conf; do
+  if ! [[ -f "${HOME}/.gnupg/${file}" ]]; then
+    echo "creating ${HOME}/.gnupg/${file}"
+    touch "${HOME}/.gnupg/${file}"
+  fi
+done
+
+if ! grep pinentry-program -q ${HOME}/.gnupg/gpg-agent.conf; then
+  echo "pinentry-program ${pinentry}" >> ${HOME}/.gnupg/gpg-agent.conf
+fi
+
+if ! grep use-agent -q ${HOME}/.gnupg/gpg.conf; then
+  echo "use-agent" >> ${HOME}/.gnupg/gpg.conf
+fi
+
+if ! grep "program = ${gpg}" -q ${HOME}/.gitconfig; then
+  sed -i "s|\(program =\) .*|\1 ${gpg}|" ${HOME}/.gitconfig
+fi
+
+for param in show diff; do
+  if ! grep -v auto ${HOME}/.gitconfig | grep "${param} = ${gitdiff}$" -q; then
+    sed -i "s|\(${param} =\)\(?!auto\).*|\1 ${gitdiff}|" ${HOME}/.gitconfig
+    sed -i "/diff = auto/! s|\(${param} =\) .*|\1 ${gitdiff}|" ~/.gitconfig
+  fi
+done
 
 alias ss='netstat -anvp tcp'
 
