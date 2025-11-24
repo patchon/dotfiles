@@ -54,7 +54,6 @@ for param in show diff; do
   fi
 done
 
-alias ss='netstat -anvp tcp'
 
 export ANDROID_SDK_ROOT=${HOME}/android/
 export ANDROID_HOME=${ANDROID_SDK_ROOT}
@@ -94,6 +93,10 @@ if [[ -t 0 ]]; then   # only run if stdin is a terminal
   bind "set visible-stats on"
   complete -d cd rmdir
   stty -ctlecho
+fi
+
+if [ $TILIX_ID ] || [ $VTE_VERSION ]; then
+          source /etc/profile.d/vte.sh
 fi
 
 # Source pureline,
