@@ -1,23 +1,45 @@
-[core]
-  excludesfile  = "~/.gitignore"
-  editor        = vim
-  autcrlf       = input
-  whitespace    = cr-at-eol
-  pager         = diff-highlight | less -R
-  ignoreCase    = false
-
 [alias]
   b       = branch -vv
-  ci      = commit -v
+  co      = "!f() { git switch \"$1\" 2>/dev/null || git switch -c \"$1\"; }; f"
   commit  = commit -v
-  co      = checkout
   st      = status
   unstage = reset HEAD --
 
-[merge]
+[branch]
+  sort = -committerdate
+
+[commit]
+  gpgSign = true
+  verbose = true
+
+[core]
+  #pager         = diff-highlight | less -R
+  autcrlf       = input
+  editor        = vim
+  fsmonitor = true
+  untrackedCache = true
+  whitespace    = cr-at-eol
+
+[diff]
+  algorithm = histogram
+  colorMoved = plain
+  mnemonicPrefix = true
   tool = p4merge
-  keepBackup = false
-  conflictstyle = diff3
+
+[fetch]
+  all = true
+  prune = true
+  pruneTags = true
+
+[gpg]
+  program = /usr/sbin/gpg
+
+[help]
+  autocorrect = prompt
+
+[merge]
+  conflictstyle = zdiff3
+  tool = p4merge
 
 [mergetool]
   prompt = false
@@ -26,47 +48,29 @@
 [mergetool "p4merge"]
   trustExitCode = true
 
-[pager]
-  show = /usr/share/git-core/contrib/diff-highlightasdfasdf
-  diff = /usr/share/git-core/contrib/diff-highlightasdfasdf
-
-[diff]
-  renames = true
-  tool = p4merge
-
-[color]
-  ui = always
-  branch = auto
-  diff = auto
-  status = auto
-
-[color "branch"]
-  current = yellow reverse
-  local = yellow
-  remote = green
-
-[color "diff"]
-  meta = blue
-  frag = magenta
-  old = red
-  new = green
-
-[color "status"]
-  added = green
-  changed = blue
-  untracked = yellow
+[pull]
+  rebase = true
 
 [push]
-  default = upstream
+  #default = upstream
+  autoSetupRemote = true
+  #default = simple
+  followTags = true
 
-[user]
-  email = patrik@redlin.se
-  name = "Patrik Martinsson"
-  signingkey = 3B1A5698BDBF8EFF
+[rebase]
+  autoSquash = true
+  autoStash = true
+  updateRefs = true
 
-[commit]
-  gpgSign = true
+[rerere]
+  enabled = true
+  autoupdate = true
+
 [tag]
   gpgSign = true
-[gpg]
-  program = /usr/bin/gpg
+  sort = version:refname
+
+[user]
+  email = martinsson.patrik@gmail.com
+  name = "Patrik Martinsson"
+  signingkey = 123
