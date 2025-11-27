@@ -27,8 +27,8 @@
   trustExitCode = true
 
 [pager]
-  show = diff-highlight | less -R
-  diff = diff-highlight | less -R
+  show = /usr/share/git-core/contrib/diff-highlightasdfasdf
+  diff = /usr/share/git-core/contrib/diff-highlightasdfasdf
 
 [diff]
   renames = true
@@ -62,11 +62,11 @@
 [user]
   email = patrik@redlin.se
   name = "Patrik Martinsson"
-  signingkey = 6E1DE566
+  signingkey = 3B1A5698BDBF8EFF
 
 [commit]
   gpgSign = true
 [tag]
   gpgSign = true
 [gpg]
-  program = /opt/homebrew/bin/gpg
+  program = /usr/bin/gpg
