@@ -1,0 +1,50 @@
+[
+  {
+    "context": "Pane",
+    "bindings": {
+      // Navigera mellan Paneler (Terminaler & Editorer)
+      // "cmd" här motsvarar din Fysiska Ctrl-knapp (eftersom du swappat)
+      "cmd-alt-up": ["workspace::ActivatePaneInDirection", "Up"],
+      "cmd-alt-down": ["workspace::ActivatePaneInDirection", "Down"],
+      "cmd-alt-left": ["workspace::ActivatePaneInDirection", "Left"],
+      "cmd-alt-right": ["workspace::ActivatePaneInDirection", "Right"],
+    },
+  },
+  {
+    "context": "Editor",
+    "bindings": {
+      "cmd-backspace": "editor::DeleteToPreviousWordStart",
+      "cmd-delete": "editor::DeleteToNextWordEnd",
+      "cmd-left": "editor::MoveToPreviousWordStart",
+      "cmd-right": "editor::MoveToNextWordEnd",
+      "cmd-a": "editor::MoveToBeginningOfLine",
+      "cmd-e": "editor::MoveToEndOfLine",
+    },
+  },
+  {
+    "context": "Terminal",
+    "bindings": {
+      "cmd-shift-c": "terminal::Copy",
+      "cmd-shift-v": "terminal::Paste",
+      "cmd-c": ["terminal::SendText", "\u0003"],
+      "cmd-d": ["terminal::SendText", "\u0004"],
+      "cmd-w": ["terminal::SendText", "\u0017"],
+      "cmd-backspace": ["terminal::SendText", "\u0017"],
+      "cmd-a": ["terminal::SendText", "\u0001"],
+      "cmd-e": ["terminal::SendText", "\u0005"],
+      "cmd-u": ["terminal::SendText", "\u0015"],
+      "cmd-k": ["terminal::SendText", "\u000b"],
+      "cmd-l": ["terminal::SendText", "\u000c"],
+      "cmd-r": ["terminal::SendText", "\u0012"],
+      "cmd-z": ["terminal::SendText", "\u001a"],
+      "cmd-left": ["terminal::SendText", "\u001bb"],
+      "cmd-right": ["terminal::SendText", "\u001bf"],
+    },
+  },
+  {
+    "context": "!ContextEditor > (Editor && mode == full)",
+    "bindings": {
+      "cmd-enter": "assistant::InlineAssist",
+    },
+  },
+]
