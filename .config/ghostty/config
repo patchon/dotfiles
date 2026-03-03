@@ -1,0 +1,71 @@
+# This is the configuration file for Ghostty.
+#
+# This template file has been automatically created at the following
+# path since Ghostty couldn't find any existing config files on your system:
+#
+#   /Users/patchon/Library/Application Support/com.mitchellh.ghostty/config
+#
+# The template does not set any default options, since Ghostty ships
+# with sensible defaults for all options. Users should only need to set
+# options that they want to change from the default.
+#
+# Run `ghostty +show-config --default --docs` to view a list of
+# all available config options and their default values.
+#
+# Additionally, each config option is also explained in detail
+# on Ghostty's website, at https://ghostty.org/docs/config.
+#
+# Ghostty can reload the configuration while running by using the menu
+# options or the bound key (default: Command + Shift + comma on macOS and
+# Control + Shift + comma on other platforms). Not all config options can be
+# reloaded while running; some only apply to new windows and others may require
+# a full restart to take effect.
+
+# Config syntax crash course
+# ==========================
+# # The config file consists of simple key-value pairs,
+# # separated by equals signs.
+# font-family = Iosevka
+# window-padding-x = 2
+#
+# # Spacing around the equals sign does not matter.
+# # All of these are identical:
+# key=value
+# key= value
+# key =value
+# key = value
+#
+# # Any line beginning with a # is a comment. It's not possible to put
+# # a comment after a config option, since it would be interpreted as a
+# # part of the value. For example, this will have a value of "#123abc":
+# background = #123abc
+#
+# # Empty values are used to reset config keys to default.
+# key =
+#
+# # Some config options have unique syntaxes for their value,
+# # which is explained in the docs for that config option.
+# # Just for example:
+# resize-overlay-duration = 4s 200ms
+auto-update-channel = tip
+keybind = cmd+shift+e=new_split:down
+keybind = cmd+shift+o=new_split:right
+
+keybind = cmd+a=text:\x01
+keybind = cmd+e=text:\x05
+keybind = cmd+c=text:\x03
+keybind = cmd+d=text:\x04
+keybind = cmd+u=text:\x15
+keybind = cmd+k=text:\x0b
+keybind = cmd+l=text:\x0c
+keybind = cmd+z=text:\x1a
+keybind = cmd+r=text:\x12
+keybind = cmd+w=text:\x17
+keybind = cmd+backspace=text:\x17
+keybind = cmd+shift+c=copy_to_clipboard
+keybind = cmd+shift+v=paste_from_clipboard
+keybind = cmd+shift+w=close_surface
+keybind = cmd+left=text:\x1bb
+keybind = cmd+right=text:\x1bf
+
+scrollback-limit = 50000000
