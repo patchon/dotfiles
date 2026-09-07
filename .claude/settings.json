@@ -16,19 +16,6 @@
     "command": "bash ~/.claude/scripts/statusline.sh",
     "refreshInterval": 1
   },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/plugins/marketplaces/superpowers-extended-cc-marketplace/hooks/examples/pre-commit-check-tasks.sh"
-          }
-        ]
-      }
-    ]
-  },
   "enabledPlugins": {
     "superpowers-extended-cc@superpowers-extended-cc-marketplace": true,
     "chrome-devtools-mcp@chrome-devtools-plugins": true

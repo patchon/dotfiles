@@ -17,11 +17,10 @@
 #   sync-claude-settings.sh diff [--no-plugins]
 #       Show what apply would change.
 #
-# --no-plugins leaves out the keys in PLUGIN_KEYS: the plugin marketplaces,
-# the plugins themselves, and the hooks, whose only entry runs a script
-# shipped by the superpowers plugin. Use it on a machine where the extra
-# skills are not wanted. It only skips those keys on the way in; it never
-# removes plugins the live file already has.
+# --no-plugins leaves out the keys in PLUGIN_KEYS: the plugin marketplaces
+# and the plugins themselves. Use it on a machine where the extra skills
+# are not wanted. It only skips those keys on the way in; it never removes
+# plugins the live file already has.
 #
 # Needs bash 3.2+ and jq 1.6+. Honours CLAUDE_CONFIG_DIR.
 
@@ -51,7 +50,6 @@ readonly SHARED_KEYS
 
 # Subset of SHARED_KEYS that --no-plugins leaves out.
 PLUGIN_KEYS=(
-  hooks
   enabledPlugins
   extraKnownMarketplaces
 )
