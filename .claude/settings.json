@@ -39,6 +39,12 @@
         "source": "github",
         "repo": "ChromeDevTools/chrome-devtools-mcp"
       }
+    },
+    "superpowers-extended-cc-marketplace": {
+      "source": {
+        "source": "github",
+        "repo": "pcvelz/superpowers"
+      }
     }
   }
 }
