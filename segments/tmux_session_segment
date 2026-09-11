@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+#
+# tmux_session_segment - the tmux session name.
+#
+# tmux's own status bar already shows this, so the segment is off by
+# default. It earns its place when the status bar is hidden, in nested or
+# remote tmux sessions where the bar is ambiguous, and because the prompt
+# is part of scrollback and copied output while the status bar is not.
+#
+# The session name is not in the environment: $TMUX holds only the socket
+# path, the server PID and the session index. Getting the name means one
+# 'tmux display-message' call (~5ms), so the result is cached and refreshed
+# only every PL_TMUX_TTL seconds (default 60) or when $TMUX changes. A
+# renamed session therefore shows up within a minute, at a cost of one
+# process per minute rather than one per prompt.
+
+[[ -z ${PL_SYMBOLS[tmux]} ]] && PL_SYMBOLS[tmux]='tmux'  # plain-text fallback
+
+__pl_tmux_cached_for=''
+__pl_tmux_cached_at=-1
+__pl_tmux_name=''
+
+#######################################
+# Appends the tmux session name.
+# Globals:
+#   TMUX, SECONDS, PL_SYMBOLS, PL_TMUX_TTL,
+#   __pl_tmux_cached_for, __pl_tmux_cached_at, __pl_tmux_name
+# Arguments:
+#   $1: background colour name.
+#   $2: foreground colour name.
+#######################################
+tmux_session_segment() {
+  [[ -z ${TMUX} ]] && return 0
+
+  local -i ttl=${PL_TMUX_TTL:-60}
+
+  if [[ ${__pl_tmux_cached_for} != "${TMUX}" ]] ||
+      (( __pl_tmux_cached_at < 0 || SECONDS - __pl_tmux_cached_at >= ttl ))
+  then
+    __pl_tmux_cached_for=${TMUX}
+    __pl_tmux_cached_at=${SECONDS}
+    __pl_tmux_name=$(tmux display-message -p '#S' 2>/dev/null)
+    # The session index is in $TMUX for free; fall back to it if tmux itself
+    # could not be asked.
+    [[ -z ${__pl_tmux_name} ]] && __pl_tmux_name=${TMUX##*,}
+  fi
+
+  pl_add_segment "$1" "$2" " ${PL_SYMBOLS[tmux]} ${__pl_tmux_name} "
+}

@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+#
+# shellcheck disable=SC2154  # globals (__pl_*) are set by pureline
+# shellcheck disable=SC2004  # __PL_VERSION_CACHE is associative
+# lang_segment - toolchain versions for the current project.
+#
+# This mirrors the green block of the starship theme, which shows the
+# version of whatever language the current directory belongs to.
+#
+# Asking an interpreter for its version is expensive -- 'node --version' is
+# roughly 30ms, which on its own would be more than twice the cost of the
+# rest of the prompt put together. Two things keep it off the hot path:
+#
+#   1. Detection is by marker file. If there is no package.json there is no
+#      reason to ask node anything, so nothing runs.
+#   2. Versions are memoised against the resolved path of the binary. The
+#      interpreter is therefore consulted once per shell, not once per
+#      prompt. Because version managers such as nvm, asdf and mise switch
+#      toolchains by changing PATH, a switch resolves to a different binary
+#      and re-reads the version by itself.
+#
+# Configure with PL_LANGUAGES. Each entry is four '|'-separated fields:
+#   <name>|<marker files>|<binary>|<version arguments>
+
+[[ -z ${PL_SYMBOLS[lang_nodejs]} ]] && PL_SYMBOLS[lang_nodejs]='node'  # Node.js
+[[ -z ${PL_SYMBOLS[lang_bun]} ]] && PL_SYMBOLS[lang_bun]='bun'         # Bun
+[[ -z ${PL_SYMBOLS[lang_python]} ]] && PL_SYMBOLS[lang_python]='py'    # Python
+[[ -z ${PL_SYMBOLS[lang_rust]} ]] && PL_SYMBOLS[lang_rust]='rs'        # Rust
+[[ -z ${PL_SYMBOLS[lang_golang]} ]] && PL_SYMBOLS[lang_golang]='go'    # Go
+[[ -z ${PL_SYMBOLS[lang_php]} ]] && PL_SYMBOLS[lang_php]='php'         # PHP
+[[ -z ${PL_SYMBOLS[lang_java]} ]] && PL_SYMBOLS[lang_java]='java'      # Java
+[[ -z ${PL_SYMBOLS[lang_kotlin]} ]] && PL_SYMBOLS[lang_kotlin]='kt'    # Kotlin
+[[ -z ${PL_SYMBOLS[lang_haskell]} ]] && PL_SYMBOLS[lang_haskell]='hs'  # Haskell
+[[ -z ${PL_SYMBOLS[lang_c]} ]] && PL_SYMBOLS[lang_c]='c'               # C
+
+# Default detection table, overridable from .pureline.conf.
+if (( ${#PL_LANGUAGES[@]} == 0 )); then
+  PL_LANGUAGES=(
+    'nodejs|package.json .nvmrc .node-version|node|--version'
+    'bun|bun.lockb bunfig.toml|bun|--version'
+    # Split to stay inside 80 columns; bash joins adjacent quoted
+    # strings into a single word.
+    'python|pyproject.toml requirements.txt setup.py Pipfile '\
+'.python-version|python3|--version'
+    'rust|Cargo.toml|rustc|--version'
+    'golang|go.mod|go|version'
+    'php|composer.json|php|--version'
+    'java|pom.xml build.gradle|java|-version'
+    'kotlin|build.gradle.kts|kotlin|-version'
+    'haskell|stack.yaml cabal.project|ghc|--version'
+    'c|CMakeLists.txt|cc|--version'
+  )
+fi
+
+#######################################
+# Pulls the first dotted version number out of a tool's version output.
+# Arguments:
+#   $1: raw output of the version command.
+# Outputs:
+#   Sets __pl_lang_version.
+# Returns:
+#   0 if a version was found, 1 otherwise.
+#######################################
+__pl_lang_parse_version() {
+  if [[ $1 =~ ([0-9]+\.[0-9]+(\.[0-9]+)?) ]]; then
+    __pl_lang_version=${BASH_REMATCH[1]}
+    return 0
+  fi
+  __pl_lang_version=''
+  return 1
+}
+
+#######################################
+# Returns a tool's version, consulting the tool at most once per shell.
+#
+# Globals:
+#   __PL_VERSION_CACHE
+# Arguments:
+#   $1: binary name.
+#   $2: arguments that make it print its version.
+# Outputs:
+#   Sets __pl_lang_version.
+# Returns:
+#   0 if a version is known, 1 otherwise.
+#######################################
+__pl_lang_lookup() {
+  local binary=$1
+  local version_arg=$2
+  local path raw
+
+  __pl_locate "${binary}" || return 1
+  path=${__pl_locate_result}
+
+  if [[ -n ${__PL_VERSION_CACHE[${path}]+set} ]]; then
+    __pl_lang_version=${__PL_VERSION_CACHE[${path}]}
+    [[ -n ${__pl_lang_version} ]]
+    return
+  fi
+
+  # Several tools (java, kotlin) print their version to stderr.
+  raw=$("${path}" "${version_arg}" 2>&1)
+
+  if __pl_lang_parse_version "${raw}"; then
+    __PL_VERSION_CACHE[${path}]=${__pl_lang_version}
+    return 0
+  fi
+
+  __PL_VERSION_CACHE[${path}]=''
+  return 1
+}
+
+#######################################
+# Appends one green block listing the toolchains this directory uses.
+#
+# Globals:
+#   PL_LANGUAGES, PL_SYMBOLS, PL_LANG_SHOW_VERSION,
+#   VIRTUAL_ENV, PL_PYTHON_SHOW_VENV
+# Arguments:
+#   $1: background colour name.
+#   $2: foreground colour name.
+#######################################
+lang_segment() {
+  local entry name markers binary version_arg marker piece
+  local content=''
+  local detected
+
+  for entry in "${PL_LANGUAGES[@]}"; do
+    name=${entry%%|*}
+    entry=${entry#*|}
+    markers=${entry%%|*}
+    entry=${entry#*|}
+    binary=${entry%%|*}
+    version_arg=${entry#*|}
+
+    detected=false
+    for marker in ${markers}; do
+      if [[ -e ${PWD}/${marker} ]]; then
+        detected=true
+        break
+      fi
+    done
+    # An active virtualenv is itself evidence of a Python project, so the
+    # segment keeps reporting it after cd-ing out of the project directory.
+    if [[ ${name} == python && -n ${VIRTUAL_ENV} ]]; then
+      detected=true
+    fi
+    [[ ${detected} == true ]] || continue
+
+    if [[ ${PL_LANG_SHOW_VERSION} == false ]]; then
+      piece="${PL_SYMBOLS[lang_${name}]}"
+    elif __pl_lang_lookup "${binary}" "${version_arg}"; then
+      piece="${PL_SYMBOLS[lang_${name}]} ${__pl_lang_version}"
+    else
+      piece="${PL_SYMBOLS[lang_${name}]}"
+    fi
+
+    # starship's [python] carries the virtualenv in the same block:
+    #   format = '[ $symbol( $version)(\($virtualenv\)) ]'
+    # so it belongs here rather than in a segment of its own.
+    if [[ ${name} == python && -n ${VIRTUAL_ENV} &&
+        ${PL_PYTHON_SHOW_VENV} != false ]]; then
+      piece+=" (${VIRTUAL_ENV##*/})"
+    fi
+
+    content+=" ${piece}"
+  done
+
+  [[ -z ${content} ]] && return 0
+
+  pl_add_segment "$1" "$2" "${content} "
+}

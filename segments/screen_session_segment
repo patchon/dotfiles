@@ -1,24 +1,18 @@
 #!/usr/bin/env bash
 #
-# screen_session_segmen
+# screen_session_segment - the GNU screen session name.
 
-# Set default symbols if not already defined in config
-# Defaults should be standard symbols.
-[[ -z ${PL_SYMBOLS[screen]} ]] && PL_SYMBOLS[screen]='■'
+[[ -z ${PL_SYMBOLS[screen]} ]] && PL_SYMBOLS[screen]='screen'
 
-# -----------------------------------------------------------------------------
-# append to prompt: "screen" session name
-# arg: $1 background color
-# arg: $2 foreground color
-function screen_session_segment {
-    if [[ "$TERM" == screen.* && -n $STY ]]; then
-        local bg_color="$1"
-        local fg_color="$2"
-        local content=" ${PL_SYMBOLS[screen]} ${STY}"
-        PS1+="$(segment_end "$fg_color" "$bg_color")"
-        PS1+="$(segment_content "$fg_color" "$bg_color" "$content ")"
-        __last_color="$bg_color"
-    fi
+#######################################
+# Appends the screen session name.
+# Globals:
+#   TERM, STY, PL_SYMBOLS
+# Arguments:
+#   $1: background colour name.
+#   $2: foreground colour name.
+#######################################
+screen_session_segment() {
+  [[ ${TERM} != screen* || -z ${STY} ]] && return 0
+  pl_add_segment "$1" "$2" " ${PL_SYMBOLS[screen]} ${STY} "
 }
-
-

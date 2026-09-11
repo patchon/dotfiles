@@ -1,23 +1,19 @@
 #!/usr/bin/env bash
 #
-# aws_profile_segment
+# aws_profile_segment - the selected AWS profile.
 
-# Set default symbols if not already defined in config
-# Defaults should be standard symbols.
-[[ -z ${PL_SYMBOLS[aws_profile]} ]] && PL_SYMBOLS[aws_profile]='☁'
+[[ -z ${PL_SYMBOLS[aws_profile]} ]] && PL_SYMBOLS[aws_profile]='aws'
 
-# -----------------------------------------------------------------------------
-# append to prompt: aws profile name
-# arg: $1 background color
-# arg: $2 foreground color
-function aws_profile_segment {
-    if [ -n "$AWS_PROFILE" ]; then
-        local aws_profile_name="${AWS_PROFILE}"
-        local bg_color="$1"
-        local fg_color="$2"
-        local content=" ${PL_SYMBOLS[aws_profile]} $aws_profile_name"
-        PS1+="$(segment_end "$fg_color" "$bg_color")"
-        PS1+="$(segment_content "$fg_color" "$bg_color" "$content ")"
-        __last_color="$bg_color"
-    fi
+#######################################
+# Appends the AWS profile name.
+# Globals:
+#   AWS_PROFILE, AWS_DEFAULT_PROFILE, PL_SYMBOLS
+# Arguments:
+#   $1: background colour name.
+#   $2: foreground colour name.
+#######################################
+aws_profile_segment() {
+  local profile=${AWS_PROFILE:-${AWS_DEFAULT_PROFILE}}
+  [[ -z ${profile} ]] && return 0
+  pl_add_segment "$1" "$2" " ${PL_SYMBOLS[aws_profile]} ${profile} "
 }

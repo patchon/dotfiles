@@ -1,380 +1,1013 @@
 #!/usr/bin/env bash
+#
+# PureLine - a pure-bash Powerline prompt (PS1).
+#
+# Styled after the Catppuccin starship theme in starship.toml, but built to
+# render an order of magnitude faster by never forking a subshell while
+# assembling the prompt.
+#
+# Usage, from ~/.bashrc:
+#   source /path/to/pureline /path/to/.pureline.conf
+#
+# Performance rules that the whole file obeys:
+#   1. No command substitution -- "$(...)" costs ~0.5ms each, and a prompt
+#      with a dozen segments used to pay that twenty times over. Segments
+#      append to PS1 directly instead of echoing through a subshell.
+#   2. No external binaries in the hot path. Everything that can be done with
+#      parameter expansion, [[ ]] tests or builtins is done that way.
+#   3. Anything unavoidable and expensive (a git call, an interpreter's
+#      --version) is either guarded so it only runs when it can produce
+#      output, or memoised for the life of the shell.
+#
+# Note on 'readonly': deliberately unused. This file is sourced into an
+# interactive shell and must stay safe to re-source.
 
-# PureLine - A Pure Bash Powerline PS1 Command Prompt
+# Clear and re-declare state so that re-sourcing this file is always safe.
+unset PL_SYMBOLS; declare -A PL_SYMBOLS      # glyphs, by role
+unset PL_COLORS; declare -A PL_COLORS        # ready-to-use escape sequences
+unset PL_SEGMENTS; declare -a PL_SEGMENTS    # segments to render, in order
+unset PL_PATH_ALIASES; declare -A PL_PATH_ALIASES  # dir name -> icon
+unset PL_LANGUAGES
+# Read by segments/lang_segment, which shellcheck cannot see from here.
+# shellcheck disable=SC2034
+declare -a PL_LANGUAGES                      # language detection table
 
-# clear all variables and declare to prevent issues when re-sourcing
-unset PL_SYMBOLS;  declare -A PL_SYMBOLS   # Hash table to reference symbols
-unset PL_COLORS;   declare -A PL_COLORS    # Hash table to reference colors
-unset PL_SEGMENTS; declare -a PL_SEGMENTS  # Array to hold segments and their arguments
+unset __PL_PATH_CACHE; declare -A __PL_PATH_CACHE        # cmd -> abs path
+unset __PL_VERSION_CACHE; declare -A __PL_VERSION_CACHE  # bin path -> version
 
-# -----------------------------------------------------------------------------
-# returns a string with the powerline symbol for a segment end
-# arg: $1 is foreground color of the next segment
-# arg: $2 is background color of the next segment
-function segment_end {
-    local end_char
-    local fg
-    if [ "$__last_color" == "$2" ]; then
-        # segment colors are the same, use a foreground separator
-        end_char="${PL_SYMBOLS[soft_separator]}"
-        fg="$1"
+__PL_PATH_SNAPSHOT=''  # value of $PATH that __PL_PATH_CACHE was built from
+__PL_TRUECOLOR=false   # whether the terminal accepts 24-bit colour
+
+#######################################
+# Decides whether the terminal supports 24-bit colour.
+# Globals:
+#   COLORTERM, TERM
+# Returns:
+#   0 if truecolor is supported, 1 otherwise.
+#######################################
+__pl_supports_truecolor() {
+  case ${COLORTERM} in
+    truecolor | 24bit) return 0 ;;
+  esac
+  case ${TERM} in
+    *-direct* | iterm | iterm2 | xterm-kitty | xterm-ghostty) return 0 ;;
+  esac
+  return 1
+}
+
+#######################################
+# Converts an 8-bit RGB triplet to the nearest xterm-256 palette index.
+# Used only when the terminal cannot do truecolor.
+# Arguments:
+#   $1, $2, $3: red, green and blue, each 0-255.
+# Outputs:
+#   Sets __pl_color_index.
+#######################################
+__pl_rgb_to_256() {
+  local -i red=$1 green=$2 blue=$3
+
+  # Greys have their own 24-step ramp, which tracks them far more closely
+  # than the 6x6x6 colour cube does.
+  if (( red == green && green == blue )); then
+    if (( red < 8 )); then
+      __pl_color_index=16
+    elif (( red > 248 )); then
+      __pl_color_index=231
     else
-        # segment colors are different, use a background separator
-        end_char="${PL_SYMBOLS[hard_separator]}"
-        fg="$__last_color"
+      __pl_color_index=$(( ((red - 8) * 24 / 247) + 232 ))
     fi
-    if [ -n "$__last_color" ]; then
-        echo "${PL_COLORS[$fg]}${PL_COLORS[On_$2]}$end_char"
-    fi
+    return
+  fi
+
+  __pl_color_index=$(( 16 + (36 * (red * 5 / 255)) + (6 * (green * 5 / 255)) \
+      + (blue * 5 / 255) ))
 }
 
-# -----------------------------------------------------------------------------
-# returns a string with background and foreground colours set
-# arg: $1 foreground color
-# arg: $2 background color
-# arg: $3 content
-function segment_content {
-    __last_color="$2"
-    echo "${PL_COLORS[$1]}${PL_COLORS[On_$2]}$3"
+#######################################
+# Defines a colour under a name, as both a foreground and a background.
+# After calling this, PL_COLORS[Name] sets the foreground and
+# PL_COLORS[On_Name] sets the background.
+#
+# This is the entry point for user-defined colours. From .pureline.conf:
+#   pl_define_color MyPink '#f5c2e7'
+#
+# Globals:
+#   PL_COLORS, __PL_TRUECOLOR
+# Arguments:
+#   $1: colour name, e.g. Peach.
+#   $2: hex colour, with or without a leading '#'.
+#######################################
+pl_define_color() {
+  local name=$1
+  local hex=${2#\#}
+  local -i red green blue
+
+  red=$(( 16#${hex:0:2} ))
+  green=$(( 16#${hex:2:2} ))
+  blue=$(( 16#${hex:4:2} ))
+
+  # The \[ \] markers tell readline these bytes occupy no columns. Without
+  # them bash miscounts the prompt width and line editing corrupts the line.
+  if [[ ${__PL_TRUECOLOR} == true ]]; then
+    PL_COLORS[${name}]="\[\e[38;2;${red};${green};${blue}m\]"
+    PL_COLORS[On_${name}]="\[\e[48;2;${red};${green};${blue}m\]"
+  else
+    __pl_rgb_to_256 "${red}" "${green}" "${blue}"
+    PL_COLORS[${name}]="\[\e[38;5;${__pl_color_index}m\]"
+    PL_COLORS[On_${name}]="\[\e[48;5;${__pl_color_index}m\]"
+  fi
 }
 
-#------------------------------------------------------------------------------
-# Helper function for User segment - also used in external ssh segment
-function ip_address {
-    local ip_address
-    local ip_loc
-    local ifconfig_loc
+#######################################
+# Loads a named palette, defining every colour in it.
+# Colour names are capitalised, so 'peach' becomes PL_COLORS[Peach].
+#
+# Globals:
+#   PL_COLORS
+# Arguments:
+#   $1: palette name. One of catppuccin_mocha, catppuccin_macchiato,
+#       catppuccin_frappe, catppuccin_latte. Defaults to catppuccin_mocha.
+#######################################
+pl_load_palette() {
+  local palette=${1:-catppuccin_mocha}
+  local -a colors
+  local entry
 
-    if ip_loc="$(type -p "ip")" || [[ -n $ip_loc ]]; then
-        ip_address="$(ip route get 1 | tr -s ' ' | cut -d' ' -f7)"
-    elif ifconfig_loc="$(type -p "ifconfig")" || [[ -n $ifconfig_loc ]]; then
-        while IFS=$': \t' read -ra _line ;do
-            [ -z "${_line%inet}"   ] &&
-                _ip=${_line[${#_line[1]}>4?1:2]} &&
-                [ "${_ip#127.0.0.1}"   ] && ip_address=$_ip
-        done< <(LANG=C /sbin/ifconfig)
+  case ${palette} in
+    catppuccin_mocha)
+      colors=(
+        rosewater=f5e0dc flamingo=f2cdcd pink=f5c2e7 mauve=cba6f7
+        red=f38ba8 maroon=eba0ac peach=fab387 yellow=f9e2af
+        green=a6e3a1 teal=94e2d5 sky=89dceb sapphire=74c7ec
+        blue=89b4fa lavender=b4befe text=cdd6f4 subtext1=bac2de
+        subtext0=a6adc8 overlay2=9399b2 overlay1=7f849c overlay0=6c7086
+        surface2=585b70 surface1=45475a surface0=313244 base=1e1e2e
+        mantle=181825 crust=11111b
+      )
+      ;;
+    catppuccin_macchiato)
+      colors=(
+        rosewater=f4dbd6 flamingo=f0c6c6 pink=f5bde6 mauve=c6a0f6
+        red=ed8796 maroon=ee99a0 peach=f5a97f yellow=eed49f
+        green=a6da95 teal=8bd5ca sky=91d7e3 sapphire=7dc4e4
+        blue=8aadf4 lavender=b7bdf8 text=cad3f5 subtext1=b8c0e0
+        subtext0=a5adcb overlay2=939ab7 overlay1=8087a2 overlay0=6e738d
+        surface2=5b6078 surface1=494d64 surface0=363a4f base=24273a
+        mantle=1e2030 crust=181926
+      )
+      ;;
+    catppuccin_frappe)
+      colors=(
+        rosewater=f2d5cf flamingo=eebebe pink=f4b8e4 mauve=ca9ee6
+        red=e78284 maroon=ea999c peach=ef9f76 yellow=e5c890
+        green=a6d189 teal=81c8be sky=99d1db sapphire=85c1dc
+        blue=8caaee lavender=babbf1 text=c6d0f5 subtext1=b5bfe2
+        subtext0=a5adce overlay2=949cbb overlay1=838ba7 overlay0=737994
+        surface2=626880 surface1=51576d surface0=414559 base=303446
+        mantle=292c3c crust=232634
+      )
+      ;;
+    catppuccin_latte)
+      colors=(
+        rosewater=dc8a78 flamingo=dd7878 pink=ea76cb mauve=8839ef
+        red=d20f39 maroon=e64553 peach=fe640b yellow=df8e1d
+        green=40a02b teal=179299 sky=04a5e5 sapphire=209fb5
+        blue=1e66f5 lavender=7287fd text=4c4f69 subtext1=5c5f77
+        subtext0=6c6f85 overlay2=7c7f93 overlay1=8c8fa1 overlay0=9ca0b0
+        surface2=acb0be surface1=bcc0cc surface0=ccd0da base=eff1f5
+        mantle=e6e9ef crust=dce0e8
+      )
+      ;;
+    *)
+      echo "pureline: unknown palette '${palette}'" >&2
+      return 1
+      ;;
+  esac
+
+  local name
+  for entry in "${colors[@]}"; do
+    name=${entry%%=*}
+    # Capitalise so that 'peach' is addressable as PL_COLORS[Peach].
+    pl_define_color "${name^}" "${entry#*=}"
+  done
+}
+
+#######################################
+# Defines the escape sequences that are not colours, plus the ANSI base
+# colours kept for backwards compatibility with older configs.
+# Globals:
+#   PL_COLORS
+#######################################
+__pl_set_base_colors() {
+  PL_COLORS[Color_Off]='\[\e[0m\]'
+  PL_COLORS[Bold]='\[\e[1m\]'
+  PL_COLORS[Dim]='\[\e[2m\]'
+  PL_COLORS[Italic]='\[\e[3m\]'
+  PL_COLORS[Underline]='\[\e[4m\]'
+
+  # 'Default' means "whatever the terminal's own default is". It is what
+  # segment caps and the trailing reset are drawn against.
+  PL_COLORS[Default]='\[\e[39m\]'
+  PL_COLORS[On_Default]='\[\e[49m\]'
+
+  # The original 8 ANSI names. A palette may override some of these (it
+  # redefines Red, Green, Yellow and Blue); the rest remain available so
+  # that configs written against stock pureline keep working.
+  PL_COLORS[Black]='\[\e[30m\]';   PL_COLORS[On_Black]='\[\e[40m\]'
+  PL_COLORS[Red]='\[\e[31m\]';     PL_COLORS[On_Red]='\[\e[41m\]'
+  PL_COLORS[Green]='\[\e[32m\]';   PL_COLORS[On_Green]='\[\e[42m\]'
+  PL_COLORS[Yellow]='\[\e[33m\]';  PL_COLORS[On_Yellow]='\[\e[43m\]'
+  PL_COLORS[Blue]='\[\e[34m\]';    PL_COLORS[On_Blue]='\[\e[44m\]'
+  PL_COLORS[Purple]='\[\e[35m\]';  PL_COLORS[On_Purple]='\[\e[45m\]'
+  PL_COLORS[Cyan]='\[\e[36m\]';    PL_COLORS[On_Cyan]='\[\e[46m\]'
+  PL_COLORS[White]='\[\e[37m\]';   PL_COLORS[On_White]='\[\e[47m\]'
+}
+
+#######################################
+# Locates an executable on PATH without forking.
+#
+# 'type -P' would need a command substitution to capture, which costs about
+# as much as a fork; walking PATH with [[ -x ]] costs a handful of stat
+# calls. Results are cached, and the cache is dropped whenever PATH changes
+# so that version managers (nvm, asdf, mise) are picked up immediately.
+#
+# Globals:
+#   PATH, __PL_PATH_CACHE, __PL_PATH_SNAPSHOT
+# Arguments:
+#   $1: command name.
+# Outputs:
+#   Sets __pl_locate_result to the absolute path on success.
+# Returns:
+#   0 if found, 1 otherwise.
+#######################################
+__pl_locate() {
+  local cmd=$1
+  local dir rest
+
+  if [[ ${__PL_PATH_SNAPSHOT} != "${PATH}" ]]; then
+    __PL_PATH_CACHE=()
+    __PL_PATH_SNAPSHOT=${PATH}
+  fi
+
+  if [[ -n ${__PL_PATH_CACHE[${cmd}]+set} ]]; then
+    __pl_locate_result=${__PL_PATH_CACHE[${cmd}]}
+    [[ -n ${__pl_locate_result} ]]
+    return
+  fi
+
+  rest=${PATH}
+  while [[ -n ${rest} ]]; do
+    dir=${rest%%:*}
+    if [[ ${rest} == *:* ]]; then
+      rest=${rest#*:}
     else
-        ip_address="127.0.0.1"
+      rest=''
     fi
-    echo $ip_address
+    if [[ -n ${dir} && -x ${dir}/${cmd} && ! -d ${dir}/${cmd} ]]; then
+      __PL_PATH_CACHE[${cmd}]="${dir}/${cmd}"
+      __pl_locate_result="${dir}/${cmd}"
+      return 0
+    fi
+  done
+
+  __PL_PATH_CACHE[${cmd}]=''
+  __pl_locate_result=''
+  return 1
 }
 
-#------------------------------------------------------------------------------
-# Helper function to return normal or super user prompt character
-function prompt_char {
-    [[ ${EUID} -eq 0 ]] && echo "#" || echo "\$"
+#######################################
+# Escapes text so that it renders literally in the prompt.
+#
+# When the 'promptvars' shell option is set -- which it is by default --
+# bash runs parameter expansion, command substitution and arithmetic
+# expansion over PS1 every time it draws the prompt. Anything interpolated
+# into PS1 is therefore live code: a directory or branch named
+# '$(rm -rf ~)' would be executed on every prompt, and a '$' in a symbol
+# would silently vanish as an undefined variable.
+#
+# The encodings below survive both prompt decoding and that second pass:
+#   \  ->  \\\\      $  ->  \\$      `  ->  \\`
+# Backslashes are handled first so the escapes added afterwards are not
+# themselves re-escaped.
+#
+# Arguments:
+#   $1: arbitrary text.
+# Outputs:
+#   Sets __pl_escaped. This is a single shared global, so a nested call
+#   overwrites it: read the result before calling anything that escapes.
+#######################################
+__pl_escape() {
+  local text=$1
+  text=${text//\\/\\\\\\\\}
+  text=${text//\$/\\\\\$}
+  text=${text//\`/\\\\\`}
+  __pl_escaped=$text
+}
+
+#######################################
+# Appends the separator that transitions into the next segment.
+#
+# Three cases, matching how a powerline prompt is drawn:
+#   - first segment on the line: a rounded opening cap, in the segment's
+#     background colour, over the terminal default background;
+#   - same background as the previous segment: a thin soft separator, so
+#     adjacent same-coloured segments stay visually distinct;
+#   - different background: the solid arrow, drawn in the previous
+#     background over the next one.
+#
+# Globals:
+#   PS1, PL_COLORS, PL_SYMBOLS, __last_color
+# Arguments:
+#   $1: background colour name of the segment being opened.
+#   $2: foreground colour name of the segment being opened.
+#######################################
+__pl_separator() {
+  if [[ -z ${__last_color} ]]; then
+    [[ -z ${PL_SYMBOLS[segment_head]} ]] && return
+    __pl_escape "${PL_SYMBOLS[segment_head]}"
+    PS1+="${PL_COLORS[On_Default]}${PL_COLORS[$1]}${__pl_escaped}"
+  elif [[ ${__last_color} == "$1" ]]; then
+    # A blank soft separator means the two segments are meant to read as one
+    # block, so emit nothing at all rather than a colour change with no glyph.
+    [[ -z ${PL_SYMBOLS[soft_separator]} ]] && return
+    __pl_escape "${PL_SYMBOLS[soft_separator]}"
+    PS1+="${PL_COLORS[$2]}${PL_COLORS[On_$1]}${__pl_escaped}"
+  else
+    PS1+="${PL_COLORS[${__last_color}]}${PL_COLORS[On_$1]}"
+    __pl_escape "${PL_SYMBOLS[hard_separator]}"
+    PS1+="${__pl_escaped}"
+  fi
+}
+
+#######################################
+# Collapses doubled padding where a segment joins the previous one with no
+# visible separator.
+#
+# Every segment pads its own content with a space on each side so that it
+# looks right standing alone. When two segments share a background and the
+# soft separator is blank they are meant to read as a single block, and
+# those two paddings meet, giving a double space. This drops one of them.
+#
+# Globals:
+#   PS1, PL_SYMBOLS, __last_color
+# Arguments:
+#   $1: background colour name of the segment being added.
+#   $2: its content.
+# Outputs:
+#   Sets __pl_content to the content, with the leading space removed when
+#   the segment joins the previous one seamlessly.
+#######################################
+__pl_join() {
+  __pl_content=$2
+  [[ -z ${__last_color} ]] && return
+  [[ ${__last_color} != "$1" ]] && return
+  [[ -n ${PL_SYMBOLS[soft_separator]} ]] && return
+  if [[ ${PS1} == *' ' && ${__pl_content} == ' '* ]]; then
+    __pl_content=${__pl_content# }
+  fi
+}
+
+#######################################
+# Appends one segment to the prompt. This is the helper every segment uses,
+# and the reason the prompt no longer forks: it writes into PS1 directly.
+#
+# Globals:
+#   PS1, PL_COLORS, __last_color
+# Arguments:
+#   $1: background colour name.
+#   $2: foreground colour name.
+#   $3: content, including any padding spaces.
+#######################################
+pl_add_segment() {
+  __pl_join "$1" "$3"
+  # Order matters: __pl_separator escapes its own glyph into __pl_escaped,
+  # so the content must be escaped after it has run, not before.
+  __pl_separator "$1" "$2"
+  __pl_escape "${__pl_content}"
+  PS1+="${PL_COLORS[$2]}${PL_COLORS[On_$1]}${__pl_escaped}"
+  __last_color=$1
+}
+
+#######################################
+# As pl_add_segment, but without escaping. Only for content that is meant
+# to contain bash prompt escapes such as \u, \h, \A or \t. Never pass
+# anything derived from a path, a branch name or other outside input.
+#
+# Globals:
+#   PS1, PL_COLORS, __last_color
+# Arguments:
+#   $1: background colour name.
+#   $2: foreground colour name.
+#   $3: content, including any padding spaces.
+#######################################
+pl_add_segment_raw() {
+  __pl_join "$1" "$3"
+  __pl_separator "$1" "$2"
+  PS1+="${PL_COLORS[$2]}${PL_COLORS[On_$1]}${__pl_content}"
+  __last_color=$1
+}
+
+#######################################
+# Closes the current run of segments with a rounded cap.
+# Globals:
+#   PS1, PL_COLORS, PL_SYMBOLS, __last_color
+#######################################
+__pl_close_line() {
+  if [[ -n ${__last_color} ]]; then
+    PS1+="${PL_COLORS[On_Default]}${PL_COLORS[${__last_color}]}"
+    __pl_escape "${PL_SYMBOLS[segment_tail]}"
+    PS1+="${__pl_escaped}"
+  fi
+  __last_color=''
+}
+
+#######################################
+# Backwards-compatible shim for third-party segments written against the
+# original pureline API. Correct, but it forks; prefer pl_add_segment.
+# Arguments:
+#   $1: foreground colour name.
+#   $2: background colour name.
+# Outputs:
+#   Writes the separator to stdout.
+#######################################
+segment_end() {
+  local end_char fg
+  if [[ ${__last_color} == "$2" ]]; then
+    end_char=${PL_SYMBOLS[soft_separator]}
+    fg=$1
+  else
+    end_char=${PL_SYMBOLS[hard_separator]}
+    fg=${__last_color}
+  fi
+  if [[ -n ${__last_color} ]]; then
+    echo "${PL_COLORS[${fg}]}${PL_COLORS[On_$2]}${end_char}"
+  else
+    echo "${PL_COLORS[On_Default]}${PL_COLORS[$2]}${PL_SYMBOLS[segment_head]}"
+  fi
+}
+
+#######################################
+# Backwards-compatible shim. See segment_end.
+# Arguments:
+#   $1: foreground colour name.
+#   $2: background colour name.
+#   $3: content.
+# Outputs:
+#   Writes the coloured content to stdout.
+#######################################
+segment_content() {
+  __last_color=$2
+  echo "${PL_COLORS[$1]}${PL_COLORS[On_$2]}$3"
+}
+
+#######################################
+# Returns the host's IP address. Only called when a segment is explicitly
+# configured to show an IP, since it is the one genuinely slow helper here.
+# Outputs:
+#   Writes the address to stdout.
+#######################################
+ip_address() {
+  local ip_addr=''
+  if [[ -x /sbin/ip || -x /usr/sbin/ip ]]; then
+    ip_addr=$(ip route get 1 2>/dev/null | tr -s ' ' | cut -d' ' -f7)
+  elif [[ -x /sbin/ifconfig ]]; then
+    local -a line
+    local candidate
+    while IFS=$': \t' read -ra line; do
+      if [[ -z ${line[0]#inet} ]]; then
+        candidate=${line[1]}
+        [[ ${candidate} != 127.0.0.1 ]] && ip_addr=${candidate}
+      fi
+    done < <(LANG=C /sbin/ifconfig 2>/dev/null)
+  fi
+  echo "${ip_addr:-127.0.0.1}"
+}
+
+#######################################
+# Returns '#' for root and '$' for everyone else.
+# Outputs:
+#   Writes the character to stdout.
+#######################################
+prompt_char() {
+  if (( EUID == 0 )); then
+    echo '#'
+  else
+    echo '$'
+  fi
 }
 
 # -----------------------------------------------------------------------------
-# append to prompt: current time
-# arg: $1 background color
-# arg: $2 foreground color
-# optional variables;
-#   PL_TIME_SHOW_SECONDS: true/false for hh:mm:ss / hh:mm
-function time_segment {
-    local bg_color="$1"
-    local fg_color="$2"
-    if [ "$PL_TIME_SHOW_SECONDS" = true ]; then
-        local content="\t"
+# Built-in segments.
+#
+# Every segment takes the same two arguments, supplied by PL_SEGMENTS:
+#   $1: background colour name
+#   $2: foreground colour name
+# A segment that has nothing to show must return without touching PS1.
+# -----------------------------------------------------------------------------
+
+#######################################
+# The OS logo, matching starship's [os] module.
+#
+# starship's [os] carries no padding of its own, so the logo sits flush
+# against the rounded cap that opens the line. This does the same when it is
+# the first segment, and pads normally if it has been moved somewhere else.
+#
+# Globals:
+#   PL_SYMBOLS, __last_color
+#######################################
+os_segment() {
+  local content="${PL_SYMBOLS[os]} "
+  [[ -n ${__last_color} ]] && content=" ${content}"
+  pl_add_segment "$1" "$2" "${content}"
+}
+
+#######################################
+# The current user, optionally with the host.
+#
+# The names are read from the environment rather than left as bash's \u and
+# \h escapes. Those are expanded by bash only after the prompt string has
+# been assembled, which is too late to apply PL_USER_LOWERCASE to them.
+# $USER and $HOSTNAME are shell variables, so reading them still costs
+# nothing. If neither is set the \u / \h escapes are used as a fallback and
+# lowercasing is skipped, since there is no string to fold at this point.
+#
+# Globals:
+#   USER, LOGNAME, HOSTNAME, EUID, PL_USER_SHOW_HOST, PL_USER_USE_IP,
+#   PL_USER_LOWERCASE
+#######################################
+user_segment() {
+  local content host_name
+  local uses_prompt_escape=false
+
+  # EUID is authoritative: 'sudo bash' leaves $USER as the invoking user.
+  if (( EUID == 0 )); then
+    content=root
+  else
+    content=${USER:-${LOGNAME}}
+  fi
+  if [[ -z ${content} ]]; then
+    content='\u'
+    uses_prompt_escape=true
+  fi
+
+  if [[ ${PL_USER_SHOW_HOST} == true ]]; then
+    if [[ ${PL_USER_USE_IP} == true ]]; then
+      host_name=$(ip_address)
     else
-        local content="\A"
+      # Short form, matching \h: everything up to the first dot.
+      host_name=${HOSTNAME%%.*}
+      if [[ -z ${host_name} ]]; then
+        host_name='\h'
+        uses_prompt_escape=true
+      fi
     fi
-    PS1+="$(segment_end "$fg_color" "$bg_color")"
-    PS1+="$(segment_content "$fg_color" "$bg_color" " $content ")"
-    __last_color="$bg_color"
+    content+="@${host_name}"
+  fi
+
+  if [[ ${PL_USER_LOWERCASE} != false && ${uses_prompt_escape} == false ]]; then
+    content=${content,,}
+  fi
+
+  if [[ ${uses_prompt_escape} == true ]]; then
+    pl_add_segment_raw "$1" "$2" " ${content} "
+  else
+    pl_add_segment "$1" "$2" " ${content} "
+  fi
 }
 
-#------------------------------------------------------------------------------
-# append to prompt: user@host or user or root@host
-# arg: $1 background color
-# arg: $2 foreground color
-# option variables;
-#   PL_USER_SHOW_HOST: true/false to show host name/ip
-#   PL_USER_USE_IP: true/false to show IP instead of hostname
-function user_segment {
-    local bg_color="$1"
-    local fg_color="$2"
-    local content="\u"
-    # Show host if true or when user is remote/root
-    if [ "$PL_USER_SHOW_HOST" = true ]; then
-        if [ "$PL_USER_USE_IP" = true ]; then
-            content+="@$(ip_address)"
-        else
-            content+="@\h"
-        fi
+#######################################
+# The working directory, with '~' for $HOME, optional truncation and
+# optional per-directory icons. Mirrors starship's [directory] module.
+# Globals:
+#   PL_PATH_TRIM, PL_PATH_ALIASES, PL_SYMBOLS
+#######################################
+path_segment() {
+  local path=${PWD}
+  local -a parts
+  local -i trim=${PL_PATH_TRIM:-0}
+  local -i count keep index
+  local part rendered=''
+
+  # Collapse $HOME to '~'. Guard against $HOME being '/' or unset, which
+  # would otherwise rewrite every path.
+  if [[ -n ${HOME} && ${HOME} != / ]]; then
+    if [[ ${path} == "${HOME}" ]]; then
+      path='~'
+    elif [[ ${path} == "${HOME}"/* ]]; then
+      path="~${path#"${HOME}"}"
     fi
-    PS1+="$(segment_end "$fg_color" "$bg_color")"
-    PS1+="$(segment_content "$fg_color" "$bg_color" " $content ")"
-    __last_color="$bg_color"
+  fi
+
+  if [[ ${path} == / ]]; then
+    pl_add_segment "$1" "$2" ' / '
+    return
+  fi
+
+  IFS=/ read -ra parts <<< "${path}"
+  count=${#parts[@]}
+
+  if (( trim == 1 )); then
+    keep=1
+  elif (( trim > 1 && count > trim )); then
+    keep=${trim}
+  else
+    keep=${count}
+  fi
+
+  for (( index = count - keep; index < count; index++ )); do
+    part=${parts[index]}
+    [[ -z ${part} ]] && continue
+    # An alias replaces a directory name with an icon, e.g. Downloads -> a
+    # download glyph, exactly as starship's [directory.substitutions] does.
+    [[ -n ${PL_PATH_ALIASES[${part}]+set} ]] && part=${PL_PATH_ALIASES[${part}]}
+    rendered+="/${part}"
+  done
+
+  if (( keep < count )); then
+    rendered="${PL_SYMBOLS[path_trimmed]}${rendered#/}"
+  elif [[ ${parts[0]} == '~' ]]; then
+    rendered=${rendered#/}
+  fi
+
+  pl_add_segment "$1" "$2" " ${rendered:-/} "
+}
+
+#######################################
+# The current time. Uses bash's own \A / \t escapes, which cost nothing.
+# Globals:
+#   PL_TIME_SHOW_SECONDS, PL_SYMBOLS
+#######################################
+time_segment() {
+  local content='\A'
+  [[ ${PL_TIME_SHOW_SECONDS} == true ]] && content='\t'
+  # Raw: \A and \t are bash prompt escapes, so only the symbol is escaped.
+  __pl_escape "${PL_SYMBOLS[time]}"
+  if [[ -n ${__pl_escaped} ]]; then
+    content="${__pl_escaped} ${content}"
+  fi
+  pl_add_segment_raw "$1" "$2" " ${content} "
+}
+
+#######################################
+# A marker when the working directory is not writable.
+# Globals:
+#   PL_SYMBOLS
+#######################################
+read_only_segment() {
+  [[ -w ${PWD} ]] && return
+  pl_add_segment "$1" "$2" " ${PL_SYMBOLS[read_only]} "
+}
+
+#######################################
+# The number of background jobs.
+#
+# Counting jobs needs a command substitution, so it is skipped entirely
+# until the shell has actually backgrounded something -- bash only sets $!
+# once a job has been started, which makes it a free guard.
+#
+# Globals:
+#   PL_SYMBOLS
+#######################################
+background_jobs_segment() {
+  [[ -z ${!} ]] && return
+
+  local -a running
+  mapfile -t running < <(jobs -r -p)
+  (( ${#running[@]} == 0 )) && return
+
+  pl_add_segment "$1" "$2" " ${PL_SYMBOLS[background_jobs]} ${#running[@]} "
+}
+
+#######################################
+# The exit status of the last command, when it failed.
+# Globals:
+#   __return_code, PL_SYMBOLS
+#######################################
+return_code_segment() {
+  (( ${__return_code:-0} == 0 )) && return
+  pl_add_segment "$1" "$2" \
+      " ${PL_SYMBOLS[return_code]} ${__return_code} "
+}
+
+#######################################
+# Ends the current line and starts a new one.
+# Globals:
+#   PS1, __last_color
+#######################################
+newline_segment() {
+  __pl_close_line
+  PS1+='\n'
+}
+
+#######################################
+# The classic pureline '$' / '#' prompt character, as a filled segment.
+# Globals:
+#   PL_PROMPT_SHOW_SHLVL, PL_PROMPT_ROOT_BG, PL_PROMPT_ROOT_FG
+#######################################
+prompt_segment() {
+  local bg=$1 fg=$2
+  local shell_level=''
+
+  if [[ ${PL_PROMPT_SHOW_SHLVL} == true ]]; then
+    shell_level=${SHLVL}
+  elif [[ ${PL_PROMPT_SHOW_SHLVL} == relative ]]; then
+    [[ -v __pl_starting_shlvl ]] || export __pl_starting_shlvl=${SHLVL}
+    shell_level=$(( SHLVL - __pl_starting_shlvl + 1 ))
+  fi
+  [[ ${shell_level} == 1 ]] && shell_level=''
+
+  if (( EUID == 0 )); then
+    [[ -n ${PL_PROMPT_ROOT_BG} ]] && bg=${PL_PROMPT_ROOT_BG}
+    [[ -n ${PL_PROMPT_ROOT_FG} ]] && fg=${PL_PROMPT_ROOT_FG}
+  fi
+
+  local char='$'
+  (( EUID == 0 )) && char='#'
+
+  pl_add_segment "${bg}" "${fg}" " ${shell_level}${char} "
+}
+
+#######################################
+# starship's [character] module: a bare prompt glyph with no background,
+# green normally and red after a failed command.
+#
+# Unlike every other segment this one takes its colour from $2 as the
+# success colour and ignores $1, because it has no background to fill.
+#
+# Globals:
+#   PS1, __return_code, PL_SYMBOLS, PL_COLORS, PL_CHARACTER_ERROR_FG
+#######################################
+character_segment() {
+  local fg=$2
+
+  if (( ${__return_code:-0} != 0 )); then
+    fg=${PL_CHARACTER_ERROR_FG:-Red}
+  fi
+
+  # __pl_close_line escapes the tail glyph into __pl_escaped, so escape the
+  # prompt character only after it has run.
+  __pl_close_line
+  __pl_escape "${PL_SYMBOLS[character]}"
+  PS1+="${PL_COLORS[On_Default]}${PL_COLORS[Bold]}${PL_COLORS[${fg}]}"
+  PS1+="${__pl_escaped}${PL_COLORS[Color_Off]} "
 }
 
 # -----------------------------------------------------------------------------
-# append to prompt: current directory
-# arg: $1 background color
-# arg: $2 foreground color
-# option variables;
-#   PL_PATH_TRIM: 0—fullpath, 1—current dir, [x]—trim to x number of dir
-function path_segment {
-    local bg_color="$1"
-    local fg_color="$2"
-    local content="\w"
-    if [ "$PL_PATH_TRIM" -eq 1 ]; then
-        local content="\W"
-    elif [ "$PL_PATH_TRIM" -gt 1 ]; then
-        PROMPT_DIRTRIM="$PL_PATH_TRIM"
-    fi
-    PS1+="$(segment_end "$fg_color" "$bg_color")"
-    PS1+="$(segment_content "$fg_color" "$bg_color" " $content ")"
-    __last_color="$bg_color"
+# Command timing.
+#
+# The original implementation ran 'date +%s%N' from a DEBUG trap, forking a
+# process before every command typed at the prompt -- and BSD date has no
+# %N, so on macOS the result was never even valid. $EPOCHREALTIME is a bash
+# 5 builtin holding seconds.microseconds, so this now costs nothing.
+# -----------------------------------------------------------------------------
+
+#######################################
+# Records when the current command started. Called from the DEBUG trap.
+# Globals:
+#   EPOCHREALTIME, __pl_cmd_start, __pl_rendering
+#######################################
+__pl_timer_start() {
+  # Commands run by PROMPT_COMMAND must not restart the clock, or the time
+  # spent typing the next command would be counted as run time.
+  [[ -n ${__pl_rendering} ]] && return
+  [[ -n ${__pl_cmd_start} ]] && return
+  # The separator in EPOCHREALTIME follows the locale, so match either.
+  __pl_cmd_start=${EPOCHREALTIME/[.,]/}
 }
 
 # -----------------------------------------------------------------------------
-# append to prompt: the number of background jobs running
-# arg: $1 background color
-# arg: $2 foreground color
-function background_jobs_segment {
-    local bg_color="$1"
-    local fg_color="$2"
-    local number_jobs
-    number_jobs=$(jobs | grep -cv "Done" | tr -d '[:space:]')
-    if [ ! "$number_jobs" -eq 0 ]; then
-        PS1+="$(segment_end "$fg_color" "$bg_color")"
-        PS1+="$(segment_content "$fg_color" "$bg_color" " ${PL_SYMBOLS[background_jobs]} $number_jobs ")"
-        __last_color="$bg_color"
-    fi
-}
-
+# Prompt driver.
 # -----------------------------------------------------------------------------
-# append to prompt: indicator is the current directory is ready-only
-# arg: $1 background color
-# arg: $2 foreground color
-function read_only_segment {
-    local bg_color="$1"
-    local fg_color="$2"
-    if [ ! -w "$PWD" ]; then
-        PS1+="$(segment_end "$fg_color" "$bg_color")"
-        PS1+="$(segment_content "$fg_color" "$bg_color" " ${PL_SYMBOLS[read_only]} ")"
-        __last_color="$bg_color"
-    fi
-}
 
-# -----------------------------------------------------------------------------
-# append to prompt: append the normal '$' or super-user '#' prompt character
-# arg: $1 background color
-# arg: $2 foreground color
-# option variables;
-#   PL_PROMPT_SHOW_SHLVL: true/relative/false to show the shell level
-#       true      Show the value of $SHLVL
-#       relative  Show the shell level relatively to the first shell sourcing pureline.
-#                   Useful when that first shell is already a sub-shell,
-#                   like in vscode integrated terminals.
-#       false     Show nothing
-function prompt_segment {
-    local bg_color="$1"
-    local fg_color="$2"
+#######################################
+# Runs before the inherited PROMPT_COMMAND.
+# Globals:
+#   __return_code, __pl_rendering, PL_TITLEBAR
+# Returns:
+#   The exit status of the command that just finished.
+#######################################
+__pureline_pre() {
+  __return_code=$?
+  __pl_rendering=1
 
-    if [[ -n $PL_PROMPT_SHOW_SHLVL ]]; then
-        # create local variable 'shell_level' ...
-        if [[ $PL_PROMPT_SHOW_SHLVL == true ]]; then
-            local shell_level=$SHLVL
-        elif [[ $PL_PROMPT_SHOW_SHLVL == relative ]]; then
-            [[ -v __pl_starting_shlvl ]] || export __pl_starting_shlvl=$SHLVL
-            local shell_level=$((SHLVL - __pl_starting_shlvl + 1))
-        fi
-        # ... except if its value is 1
-        ((shell_level != 1)) || unset shell_level
-    fi
-
-    local content
-    content=" ${shell_level:-}$(prompt_char) "
-    if [ ${EUID} -eq 0 ]; then
-        if [ -n "$PL_PROMPT_ROOT_FG" ]; then
-            fg_color="$PL_PROMPT_ROOT_FG"
-        fi
-        if [ -n "$PL_PROMPT_ROOT_BG" ]; then
-            bg_color="$PL_PROMPT_ROOT_BG"
-        fi
-    fi
-    PS1+="$(segment_end "$fg_color" "$bg_color")"
-    PS1+="$(segment_content "$fg_color" "$bg_color" "$content")"
-    __last_color="$bg_color"
-}
-
-# -----------------------------------------------------------------------------
-# append to prompt: return code for previous command
-# arg: $1 background color
-# arg: $2 foreground color
-function return_code_segment {
-    if [ ! "$__return_code" -eq 0 ]; then
-        local bg_color="$1"
-        local fg_color="$2"
-        local content=" ${PL_SYMBOLS[return_code]} $__return_code "
-        PS1+="$(segment_end "$fg_color" "$bg_color")"
-        PS1+="$(segment_content "$fg_color" "$bg_color" "$content")"
-        __last_color="$bg_color"
-    fi
-}
-
-# -----------------------------------------------------------------------------
-# append to prompt: end the current promptline and start a newline
-function newline_segment {
-    if [ -n "$__last_color" ]; then
-        PS1+="$(segment_end "$__last_color" 'Default')"
-    fi
-    PS1+="\n"
-    unset __last_color
-}
-
-# -----------------------------------------------------------------------------
-# code to run before processing the inherited $PROMPT_COMMAND
-function __pureline_pre {
-    __return_code=$?                    # save return code of last command
-
-    if [[ -n $PL_TITLEBAR ]]; then
-        if (( ${BASH_VERSINFO[0]:-0} > 4 || (${BASH_VERSINFO[0]:-0} == 4 && ${BASH_VERSINFO[1]:-0} >= 4) )); then
-            # since bash 4.4, @P allows variable expansion as if it were a prompt string (like PS1)
-            echo -ne "\e]2;${PL_TITLEBAR@P}\a"  # set the gui window title
-        else
-            echo -ne "\e]2;'${PL_TITLEBAR}'\a"  # set the gui window title
-        fi
-    fi
-
-    return $__return_code  # forward it to the inherited $PROMPT_COMMAND
-}
-
-# -----------------------------------------------------------------------------
-# code to run after processing the inherited $PROMPT_COMMAND
-function __pureline_post {
-    local segment_index
-    PS1=""                                  # reset the command prompt
-
-    # load the segments
-    for segment_index in "${!PL_SEGMENTS[@]}"; do
-        ${PL_SEGMENTS[$segment_index]}
-    done
-
-    # final end point
-    if ((${#PL_SEGMENTS[@]} > 0)); then
-        PS1+="$(segment_end "$__last_color" 'Default') "
+  if [[ -n ${PL_TITLEBAR} ]]; then
+    # @P expands a string as if it were a prompt, so PL_TITLEBAR can use the
+    # same \u \h \w escapes as PS1. It needs bash 4.4 or newer.
+    if (( BASH_VERSINFO[0] > 4 ||
+        (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) )); then
+      printf '\e]2;%s\a' "${PL_TITLEBAR@P}"
     else
-        # No segments loaded, set a basic prompt
-        PS1="PL | No segments Loaded: $(prompt_char)"
+      printf '\e]2;%s\a' "${PL_TITLEBAR}"
     fi
+  fi
 
-    # cleanup
-    PS1+="${PL_COLORS[Color_Off]}"
-    if [ "$PL_ERASE_TO_EOL" = true ]; then
-        PS1+="\[\e[K\]"
+  return ${__return_code}
+}
+
+#######################################
+# Builds PS1. Runs after the inherited PROMPT_COMMAND.
+# Globals:
+#   PS1, PL_SEGMENTS, __last_color, __return_code, __pl_rendering,
+#   __pl_cmd_start, PL_ERASE_TO_EOL
+#######################################
+__pureline_post() {
+  local segment
+
+  PS1=''
+  __last_color=''
+
+  if (( ${#PL_SEGMENTS[@]} == 0 )); then
+    PS1="PL | No segments loaded: $(prompt_char) "
+    return
+  fi
+
+  for segment in "${PL_SEGMENTS[@]}"; do
+    # Unquoted on purpose: each entry is "name Bg Fg" and must word-split
+    # into a command and its two arguments.
+    # shellcheck disable=SC2086
+    ${segment}
+  done
+
+  # Close any run of segments the last one left open. A config ending in
+  # character_segment has already closed it, and this is then a no-op.
+  if [[ -n ${__last_color} ]]; then
+    __pl_close_line
+    PS1+=' '
+  fi
+
+  PS1+="${PL_COLORS[Color_Off]}"
+  [[ ${PL_ERASE_TO_EOL} == true ]] && PS1+='\[\e[K\]'
+
+  __last_color=''
+  __return_code=0
+  __pl_cmd_start=''
+  __pl_rendering=''
+}
+
+#######################################
+# Detects the running OS and picks its logo, once, at startup.
+# Globals:
+#   OSTYPE, PL_SYMBOLS
+#######################################
+__pl_detect_os() {
+  # Already set by the config? Leave it alone.
+  [[ -n ${PL_SYMBOLS[os]} ]] && return
+
+  case ${OSTYPE} in
+    darwin*)
+      PL_SYMBOLS[os]=$'\U000f0035'  # Apple logo
+      return
+      ;;
+    msys* | cygwin* | win32)
+      PL_SYMBOLS[os]=$'\ue70f'  # Windows logo
+      return
+      ;;
+  esac
+
+  local distro=''
+  if [[ -r /etc/os-release ]]; then
+    local line
+    while IFS= read -r line; do
+      if [[ ${line} == ID=* ]]; then
+        distro=${line#ID=}
+        distro=${distro//\"/}
+        break
+      fi
+    done < /etc/os-release
+  fi
+
+  case ${distro} in
+    ubuntu) PL_SYMBOLS[os]=$'\U000f0548' ;;        # Ubuntu
+    debian) PL_SYMBOLS[os]=$'\U000f08da' ;;        # Debian
+    fedora) PL_SYMBOLS[os]=$'\U000f08db' ;;        # Fedora
+    arch) PL_SYMBOLS[os]=$'\U000f08c7' ;;          # Arch
+    manjaro) PL_SYMBOLS[os]=$'\uf312' ;;           # Manjaro
+    alpine) PL_SYMBOLS[os]=$'\uf300' ;;            # Alpine
+    centos) PL_SYMBOLS[os]=$'\uf304' ;;            # CentOS
+    gentoo) PL_SYMBOLS[os]=$'\U000f08e8' ;;        # Gentoo
+    linuxmint) PL_SYMBOLS[os]=$'\U000f08ed' ;;     # Linux Mint
+    opensuse* | sles) PL_SYMBOLS[os]=$'\uf314' ;;  # openSUSE and SLES
+    raspbian) PL_SYMBOLS[os]=$'\U000f043f' ;;      # Raspberry Pi OS
+    rhel) PL_SYMBOLS[os]=$'\U000f111b' ;;          # Red Hat Enterprise Linux
+    amzn) PL_SYMBOLS[os]=$'\uf270' ;;              # Amazon Linux
+    *) PL_SYMBOLS[os]=$'\U000f033d' ;;             # Tux, any other distro
+  esac
+}
+
+#######################################
+# The default glyph set. Plain characters only, so that a terminal without a
+# Nerd Font still produces a readable prompt; .pureline.conf overrides these
+# with the powerline and Nerd Font glyphs.
+# Globals:
+#   PL_SYMBOLS
+#######################################
+__pl_set_default_symbols() {
+  PL_SYMBOLS=(
+    [segment_head]=''      # no cap without a powerline font
+    [segment_tail]=''      # no cap without a powerline font
+    [hard_separator]='▶'   # black right-pointing triangle
+    [soft_separator]='│'   # box-drawing vertical line
+    [path_trimmed]='.../'  # marks a shortened path
+    [read_only]='RO'       # directory is not writable
+    [return_code]='x'      # last command failed
+    [background_jobs]='&'  # running background jobs
+    [character]='>'        # the prompt character
+    [time]='@'             # no clock glyph in plain text
+  )
+}
+
+#######################################
+# The default prompt, used when no config file is supplied.
+# Globals:
+#   PL_SEGMENTS, PL_USER_SHOW_HOST, PL_PATH_TRIM
+#######################################
+__pl_set_default_segments() {
+  PL_SEGMENTS=(
+    'user_segment      Yellow  Black'
+    'path_segment      Blue    Black'
+    'read_only_segment Red     White'
+  )
+  PL_USER_SHOW_HOST=true
+  PL_PATH_TRIM=1
+}
+
+#######################################
+# Sources the external segment file for every configured segment that is not
+# already defined.
+# Globals:
+#   PL_SEGMENTS, BASH_SOURCE
+#######################################
+__pl_load_segments() {
+  local segment_dir=${BASH_SOURCE[0]%/*}/segments
+  local entry name
+
+  for entry in "${PL_SEGMENTS[@]}"; do
+    name=${entry%% *}
+    if [[ -r ${segment_dir}/${name} ]]; then
+      # Always source it, even when the function is already defined. The
+      # previous "skip if already defined" guard meant that re-sourcing
+      # pureline in a running shell silently kept the segment functions the
+      # shell started with, so edits to a segment file never took effect and
+      # a stale segment could be paired with a freshly loaded config.
+      #
+      # A consequence is that a segment file always wins over a function of
+      # the same name defined in the config; give a custom segment its own
+      # name rather than shadowing a shipped one.
+      # shellcheck source=/dev/null
+      source "${segment_dir}/${name}"
+    elif [[ -z $(type -t "${name}") ]]; then
+      echo "pureline: no such segment '${name}'" >&2
     fi
-    unset __last_color
-    unset __return_code
+  done
 }
 
-# -----------------------------------------------------------------------------
-# define the default color set
-function set_default_colors() {
-    PL_COLORS=(
-        [Color_Off]='\[\e[0m\]'       # Text Reset
-        # Foreground
-        [Default]='\[\e[0;39m\]'      # Default
-        [Black]='\[\e[0;30m\]'        # Black
-        [Red]='\[\e[0;31m\]'          # Red
-        [Green]='\[\e[0;32m\]'        # Green
-        [Yellow]='\[\e[0;33m\]'       # Yellow
-        [Blue]='\[\e[0;34m\]'         # Blue
-        [Purple]='\[\e[0;35m\]'       # Purple
-        [Cyan]='\[\e[0;36m\]'         # Cyan
-        [White]='\[\e[0;37m\]'        # White
-        # Background
-        [On_Default]='\[\e[49m\]'     # Default
-        [On_Black]='\[\e[40m\]'       # Black
-        [On_Red]='\[\e[41m\]'         # Red
-        [On_Green]='\[\e[42m\]'       # Green
-        [On_Yellow]='\[\e[43m\]'      # Yellow
-        [On_Blue]='\[\e[44m\]'        # Blue
-        [On_Purple]='\[\e[45m\]'      # Purple
-        [On_Cyan]='\[\e[46m\]'        # Cyan
-        [On_White]='\[\e[47m\]'       # White
-    )
-}
+#######################################
+# Entry point. Sourced with an optional path to a config file.
+# Arguments:
+#   $1: path to a pureline config file.
+#######################################
+main() {
+  __pl_supports_truecolor && __PL_TRUECOLOR=true
 
-# -----------------------------------------------------------------------------
-# default symbols are intended for 'out-of-the-box' compatibility.
-# symbols from code page 437: character set of the original IBM PC
-function set_default_symbols {
-    PL_SYMBOLS=(
-        [hard_separator]="▶"
-        [soft_separator]="│"
+  __pl_set_base_colors
+  __pl_set_default_symbols
+  __pl_set_default_segments
 
-        [read_only]="Θ"
-        [return_code]="x"
-        [background_jobs]="↨"
-        [background_jobs]="↔"
-    )
-}
+  PL_TITLEBAR='\u@\h: \w'  # may use PS1-style escapes
+  PL_ERASE_TO_EOL=false    # some terminals need this to avoid artefacts
 
-# -----------------------------------------------------------------------------
-# default set of segments
-function set_default_segments {
-    PL_SEGMENTS=(
-        'user_segment        Yellow      Black'
-        'path_segment        Blue        Black'
-        'read_only_segment   Red         White'
-    )
-    PL_USER_SHOW_HOST=true
-    PL_PATH_TRIM=1
-}
+  # tmux manages its own pane titles.
+  [[ -n ${TMUX} ]] && PL_TITLEBAR=''
 
-# -----------------------------------------------------------------------------
-# entry point to setup pureline
-function main() {
-    local segment_index
-    local segment_function
+  if [[ -f $1 ]]; then
+    # shellcheck source=/dev/null
+    source "$1"
+  fi
 
-    set_default_colors
-    set_default_symbols
-    set_default_segments
+  __pl_detect_os
+  __pl_load_segments
 
-    # set some defaults
-    PL_TITLEBAR="\u@\h: \w" # title bar setting can use PS1 style \u etc
-    PL_ERASE_TO_EOL=false   # need on some terminals to prevent glitches
-
-    # If using tmux, allow pane titles to persist
-    [[ -n $TMUX ]] && unset PL_TITLEBAR
-
-    # check if an argument has been given for a config file
-    if [ -f "$1" ]; then
-        # shellcheck source=/dev/null
-        source "$1"
+  # Time commands only when a segment asks for it. A DEBUG trap fires
+  # before every command in the shell, so it is not installed speculatively.
+  local entry
+  for entry in "${PL_SEGMENTS[@]}"; do
+    if [[ ${entry%% *} == duration_segment ]]; then
+      trap '__pl_timer_start' DEBUG
+      break
     fi
+  done
 
-    # source external segments
-    local segment_dir
-    segment_dir=$(dirname "${BASH_SOURCE[0]}")'/segments'
-    for segment_index in "${!PL_SEGMENTS[@]}"; do
-        # check if segment function is not defined
-        segment_function=${PL_SEGMENTS[$segment_index]%% *}
-        if [ -z "$(type -t "$segment_function")" ]; then
-            # if not defined, source external function
-            # shellcheck source=/dev/null
-            source "$segment_dir"'/'"$segment_function"
-        fi
-    done
-
-    # dynamically set the PS1
-    if [[ ! ${PROMPT_COMMAND} =~ 'pureline_ps1' ]]; then
-        eval "$(echo -e "
-            function pureline_ps1 {
-                __pureline_pre
-                $PROMPT_COMMAND
-                __pureline_post
-            }
-        ")"
-        PROMPT_COMMAND="pureline_ps1"
-        # Note: defining PROMPT_COMMAND as a call to a single function simplifies a lot
-        #   the integration of pureline in other prompt-modifying tools 
-        #   (like the 'shell integration' feature of the integrated terminals of VSCode).
-    fi
+  if [[ ${PROMPT_COMMAND} != *pureline_ps1* ]]; then
+    # Wrapping the inherited PROMPT_COMMAND in a single function keeps
+    # pureline compatible with tools that install their own prompt hooks,
+    # such as the shell integration in VS Code's terminal.
+    eval "pureline_ps1() {
+      __pureline_pre
+      ${PROMPT_COMMAND}
+      __pureline_post
+    }"
+    PROMPT_COMMAND='pureline_ps1'
+  fi
 }
 
-main "${@}"
+main "$@"

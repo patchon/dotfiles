@@ -1,24 +1,18 @@
 #!/usr/bin/env bash
+#
+# virtual_env_segment - the active Python virtualenv.
 
-# virtual_env_segment
+[[ -z ${PL_SYMBOLS[python]} ]] && PL_SYMBOLS[python]='py'  # Python, plain text
 
-# Set default symbols if not already defined in config
-# Defaults should be standard symbols.
-[[ -z ${PL_SYMBOLS[python]} ]] && PL_SYMBOLS[python]='π'
-
-# -----------------------------------------------------------------------------
-# append to prompt: python virtual environment name
-# arg: $1 background color
-# arg: $2 foreground color
-function virtual_env_segment {
-    if [ -n "$VIRTUAL_ENV" ]; then
-        local venv="${VIRTUAL_ENV##*/}"
-        local bg_color="$1"
-        local fg_color="$2"
-        local content=" ${PL_SYMBOLS[python]} $venv"
-        PS1+="$(segment_end "$fg_color" "$bg_color")"
-        PS1+="$(segment_content "$fg_color" "$bg_color" "$content ")"
-        __last_color="$bg_color"
-    fi
+#######################################
+# Appends the active virtualenv's name.
+# Globals:
+#   VIRTUAL_ENV, PL_SYMBOLS
+# Arguments:
+#   $1: background colour name.
+#   $2: foreground colour name.
+#######################################
+virtual_env_segment() {
+  [[ -z ${VIRTUAL_ENV} ]] && return 0
+  pl_add_segment "$1" "$2" " ${PL_SYMBOLS[python]} ${VIRTUAL_ENV##*/} "
 }
-

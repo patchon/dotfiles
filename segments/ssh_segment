@@ -1,33 +1,35 @@
 #!/usr/bin/env bash
+#
+# ssh_segment - shown only when the shell is on the far end of an ssh
+# connection.
 
-# ssh_segment
+[[ -z ${PL_SYMBOLS[ssh]} ]] && PL_SYMBOLS[ssh]='ssh'  # remote session
 
-# Set default symbols if not already defined in config
-# Defaults should be standard symbols.
-[[ -z ${PL_SYMBOLS[ssh]} ]] && PL_SYMBOLS[ssh]='╤'
+#######################################
+# Appends an ssh indicator, optionally with the host.
+# Globals:
+#   SSH_CLIENT, SSH_TTY, SSH_CONNECTION, PL_SSH_SHOW_HOST, PL_SSH_USE_IP
+# Arguments:
+#   $1: background colour name.
+#   $2: foreground colour name.
+#######################################
+ssh_segment() {
+  [[ -z ${SSH_CLIENT} && -z ${SSH_TTY} && -z ${SSH_CONNECTION} ]] && return 0
 
-# -----------------------------------------------------------------------------
-# append to prompt: indicate if SSH session
-# arg: $1 foreground color
-# arg: $2 background color
-# option variables;
-#   PL_SSH_SHOW_HOST: true/false to show host name/ip
-#   PL_SSH_USE_IP: true/false to show IP instead of hostname
-function ssh_segment {
-    if [[ "${SSH_CLIENT}" || "${SSH_TTY}" ]]; then
-        local bg_color="$1"
-        local fg_color="$2"
-        local content="${PL_SYMBOLS[ssh]}"
-        if [ "$PL_SSH_SHOW_HOST" = true ]; then
-            if [ "$PL_SSH_USE_IP" = true ]; then
-                content+=" $(ip_address)"
-            else
-                content+=" \h"
-            fi
-        fi
-        PS1+="$(segment_end "$fg_color" "$bg_color")"
-        PS1+="$(segment_content "$fg_color" "$bg_color" " $content ")"
-        __last_color="$bg_color"
+  local content=${PL_SYMBOLS[ssh]}
+
+  if [[ ${PL_SSH_SHOW_HOST} == true ]]; then
+    if [[ ${PL_SSH_USE_IP} == true ]]; then
+      # SSH_CONNECTION is "client_ip client_port server_ip server_port", so
+      # the server address is already here and needs no ifconfig call.
+      local -a connection
+      read -ra connection <<< "${SSH_CONNECTION}"
+      content+=" ${connection[2]:-\\h}"
+    else
+      content+=' \h'
     fi
-}
+  fi
 
+  # Raw: \h is a bash prompt escape and must reach PS1 intact.
+  pl_add_segment_raw "$1" "$2" " ${content} "
+}
