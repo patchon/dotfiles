@@ -15,6 +15,9 @@ export PATH="${ANDROID_SDK_ROOT}/platform-tools/:${PATH}"
 export PATH="/usr/share/android-studio/jre/bin/:${PATH}"
 export PATH="${HOME}/.gradle/wrapper/dists/gradle-5.4.1-all/3221gyojl5jsh0helicew7rwx/gradle-5.4.1/bin/:${PATH}"
 
+# Claude
+export BASH_MAX_OUTPUT_LENGTH=15000
+
 # Set envs
 export EDITOR='vim'
 export GOPATH=${HOME}/go
@@ -53,6 +56,8 @@ if [[ -n "${TILIX_ID}" ]] || [[ -n "${VTE_VERSION}" ]]; then
   fi
 fi
 
+#export PS1="$ > "
+#export PS1="\[\e[34m\]$\[\e[0m\] \[\e[32m\]>\[\e[0m\] "
 # Source pureline,
 if [[ -f ~/dotfiles/pureline ]]; then
   source ~/dotfiles/pureline ~/dotfiles/.pureline.conf
@@ -82,6 +87,9 @@ if [[ $(uname -s) == Darwin* ]];then
   eval "$(/opt/homebrew/bin/brew shellenv)"
   pinentry=$(echo $(brew --prefix)/bin/pinentry-mac)
   gpg=$(echo $(brew --prefix)/bin/gpg)
+
+  export ANDROID_SDK_ROOT=${HOME}/Library/Android/sdk
+  export ANDROID_HOME=${ANDROID_SDK_ROOT}
 else
   pinentry=$(which pinentry)
   gpg=$(which gpg)
@@ -152,3 +160,10 @@ fi
 
 gpg-connect-agent /bye
 export GPG_TTY=$(tty)
+
+# nanobrew
+export PATH="/opt/nanobrew/prefix/bin:$PATH"
+
+# Claude Status Bar Monitor
+alias cs='claude-statusbar'
+alias cstatus='claude-statusbar'

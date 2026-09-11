@@ -876,21 +876,25 @@ __pl_detect_os() {
     done < /etc/os-release
   fi
 
+  # Font Logos glyphs (U+F30x): drawn to fit one cell, so they keep their
+  # size in "Nerd Font Mono" faces, where the larger Material Design logos
+  # are scaled down to fit. The Apple logo above only renders in Ghostty,
+  # which constrains icons itself, so it keeps the Material Design glyph.
   case ${distro} in
-    ubuntu) PL_SYMBOLS[os]=$'\U000f0548' ;;        # Ubuntu
-    debian) PL_SYMBOLS[os]=$'\U000f08da' ;;        # Debian
-    fedora) PL_SYMBOLS[os]=$'\U000f08db' ;;        # Fedora
-    arch) PL_SYMBOLS[os]=$'\U000f08c7' ;;          # Arch
+    ubuntu) PL_SYMBOLS[os]=$'\uf31b' ;;            # Ubuntu
+    debian) PL_SYMBOLS[os]=$'\uf306' ;;            # Debian
+    fedora) PL_SYMBOLS[os]=$'\uf30a' ;;            # Fedora
+    arch) PL_SYMBOLS[os]=$'\uf303' ;;              # Arch
     manjaro) PL_SYMBOLS[os]=$'\uf312' ;;           # Manjaro
     alpine) PL_SYMBOLS[os]=$'\uf300' ;;            # Alpine
     centos) PL_SYMBOLS[os]=$'\uf304' ;;            # CentOS
-    gentoo) PL_SYMBOLS[os]=$'\U000f08e8' ;;        # Gentoo
-    linuxmint) PL_SYMBOLS[os]=$'\U000f08ed' ;;     # Linux Mint
+    gentoo) PL_SYMBOLS[os]=$'\uf30d' ;;            # Gentoo
+    linuxmint) PL_SYMBOLS[os]=$'\uf30e' ;;         # Linux Mint
     opensuse* | sles) PL_SYMBOLS[os]=$'\uf314' ;;  # openSUSE and SLES
-    raspbian) PL_SYMBOLS[os]=$'\U000f043f' ;;      # Raspberry Pi OS
-    rhel) PL_SYMBOLS[os]=$'\U000f111b' ;;          # Red Hat Enterprise Linux
+    raspbian) PL_SYMBOLS[os]=$'\uf315' ;;          # Raspberry Pi OS
+    rhel) PL_SYMBOLS[os]=$'\uf316' ;;              # Red Hat Enterprise Linux
     amzn) PL_SYMBOLS[os]=$'\uf270' ;;              # Amazon Linux
-    *) PL_SYMBOLS[os]=$'\U000f033d' ;;             # Tux, any other distro
+    *) PL_SYMBOLS[os]=$'\uf31a' ;;                 # Tux, any other distro
   esac
 }
 
