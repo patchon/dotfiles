@@ -22,6 +22,7 @@ endif
 set backupdir=~/.cache/.vim//
 set directory=~/.cache/.vim//
 set undodir=~/.cache/.vim//
+set undofile
 set writebackup
 au BufWritePre * let &bex = '@' . strftime("%F.%H.%M")
 
