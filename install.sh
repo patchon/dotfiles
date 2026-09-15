@@ -10,6 +10,10 @@
 # Links are relative (~/.bashrc -> dotfiles/.bashrc), so they keep working
 # if the home directory moves.
 #
+# A destination that already resolves to the repo file, for instance because
+# ~/.config is itself a symlink into the repo, is left alone. Nothing is ever
+# created inside the repo.
+#
 # Usage:
 #   ./install.sh            create the links
 #   ./install.sh --dry-run  print what would be done, change nothing
@@ -19,6 +23,7 @@
 set -euo pipefail
 
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_phys=$(cd "${repo}" && pwd -P)  # symlinks resolved, for containment tests
 dry_run=false
 
 # Paths relative to both the repo and $HOME.
@@ -99,7 +104,7 @@ move_aside() {
 #######################################
 # Link one repo path into $HOME.
 # Globals:
-#   repo, HOME
+#   repo, repo_phys, HOME
 # Arguments:
 #   Path relative to the repo root
 #######################################
@@ -108,7 +113,7 @@ link() {
   local src="${repo}/${rel}"
   local dst="${HOME}/${rel}"
   local dst_dir="${dst%/*}"
-  local target
+  local target dir_phys
 
   if [[ ! -e "${src}" ]]; then
     err "missing in repo, skipped: ${rel}"
@@ -116,11 +121,28 @@ link() {
   fi
   target=$(relative_path "${dst_dir}" "${src}")
 
+  if [[ -L "${dst}" && "$(readlink "${dst}")" == "${target}" ]]; then
+    echo "ok       ${dst}"
+    return 0
+  fi
+
+  # Same inode as the repo file: reached through a symlinked parent such as
+  # ~/.config -> dotfiles/.config, or an absolute link. Replacing it would
+  # delete the repo's own copy.
+  if [[ -e "${dst}" && "${dst}" -ef "${src}" ]]; then
+    echo "ok       ${dst} (already the repo file)"
+    return 0
+  fi
+
+  # Never create a link inside the repo itself.
+  dir_phys=$(cd "${dst_dir}" 2>/dev/null && pwd -P) || dir_phys=''
+  if [[ -n "${dir_phys}" ]] \
+      && [[ "${dir_phys}" == "${repo_phys}" || "${dir_phys}" == "${repo_phys}"/* ]]; then
+    err "skipped ${dst}: its directory resolves into the repo"
+    return 0
+  fi
+
   if [[ -L "${dst}" ]]; then
-    if [[ "$(readlink "${dst}")" == "${target}" ]]; then
-      echo "ok       ${dst}"
-      return 0
-    fi
     move_aside "${dst}"
   elif [[ -f "${dst}" ]] && cmp -s "${dst}" "${src}"; then
     echo "replace  ${dst} (identical copy)"
