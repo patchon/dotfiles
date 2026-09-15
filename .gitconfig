@@ -14,7 +14,7 @@
 
 [core]
   #pager         = diff-highlight | less -R
-  autcrlf       = input
+  autocrlf      = input
   editor        = vim
   fsmonitor = true
   untrackedCache = true
