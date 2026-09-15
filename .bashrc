@@ -93,6 +93,14 @@ setup_ssh_agent() {
 
 #######################################
 # Add a private key to the agent unless it already holds keys.
+#
+# On macOS the passphrase is kept in the keychain: the first shell asks for
+# it once and stores it, every shell after that loads the key silently.
+# Apple's /usr/bin/ssh-add is used explicitly for that, since a Homebrew
+# openssh earlier in PATH does not know the --apple-* options. Elsewhere
+# ssh-add prompts until a key is loaded.
+# Globals:
+#   OSTYPE
 # Arguments:
 #   Path to private key
 #######################################
@@ -100,7 +108,14 @@ add_ssh_key() {
   local key="$1"
   [[ -f "${key}" ]] || return 0
   ssh-add -l &> /dev/null && return 0
-  ssh-add "${key}"
+
+  if [[ "${OSTYPE}" == darwin* && -x /usr/bin/ssh-add ]]; then
+    /usr/bin/ssh-add --apple-load-keychain 2> /dev/null
+    ssh-add -l &> /dev/null && return 0
+    /usr/bin/ssh-add --apple-use-keychain "${key}"
+  else
+    ssh-add "${key}"
+  fi
 }
 
 #######################################
