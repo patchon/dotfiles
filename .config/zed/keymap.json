@@ -1,5 +1,11 @@
 [
   {
+    "context": "Workspace",
+    "bindings": {
+      "cmd-shift-t": "workspace::ToggleBottomDock",
+    },
+  },
+  {
     "context": "Pane",
     "bindings": {
       "cmd-alt-up": "workspace::ActivatePaneUp",

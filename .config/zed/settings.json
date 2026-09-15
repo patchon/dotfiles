@@ -1,22 +1,39 @@
 {
+  "project_panel": {
+    "dock": "left"
+  },
+  "outline_panel": {
+    "dock": "right"
+  },
+  "git_panel": {
+    "dock": "right"
+  },
+  "agent_servers": {
+    "claude-acp": {
+      "type": "registry",
+    },
+  },
   "agent_ui_font_size": 15.0,
   "autosave": {
     "after_delay": {
       "milliseconds": 100,
     },
   },
-  "buffer_font_size": 10.0,
+  "buffer_font_size": 12.0,
   "buffer_font_weight": 400.0,
   "buffer_font_family": "MesloLGSDZ Nerd Font",
   "agent": {
+    "dock": "right",
+    "default_width": 100.0,
+    "button": true,
     "tool_permissions": {
-      "default": "allow"
+      "default": "allow",
     },
     "favorite_models": [
       {
         "provider": "google",
-        "model": "gemini-3-pro-preview"
-      }
+        "model": "gemini-3-pro-preview",
+      },
     ],
     "inline_assistant_model": {
       "provider": "google",
@@ -29,6 +46,7 @@
   },
   "buffer_line_height": "standard",
   "collaboration_panel": {
+    "dock": "right",
     "button": false,
   },
   "colorize_brackets": true,
@@ -73,17 +91,18 @@
     "git_status": true,
   },
   "title_bar": {
-    "show_branch_icon": true,
+    "show_branch_status_icon": true
   },
   "telemetry": {
     "metrics": false,
     "diagnostics": false,
   },
   "terminal": {
-    "font_size": 9.0,
+    "dock": "bottom",
+    "font_size": 12.0,
     "cursor_shape": "bar",
     "font_family": "MesloLGM Nerd Font",
-    "max_scroll_history_lines": 100000,
+    "max_scroll_history_lines": 100001,
   },
   "theme": "Tokyo Night",
   "ui_font_size": 14.0,
