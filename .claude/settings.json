@@ -2,7 +2,8 @@
   "model": "fable[1m]",
   "effortLevel": "xhigh",
   "env": {
-    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000"
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000",
+    "BASH_MAX_OUTPUT_LENGTH": "15000"
   },
   "tui": "fullscreen",
   "editorMode": "normal",

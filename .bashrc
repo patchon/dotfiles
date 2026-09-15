@@ -220,7 +220,6 @@ path_prepend /opt/nanobrew/prefix/bin
 export PATH
 
 export EDITOR='vim'
-export BASH_MAX_OUTPUT_LENGTH=15000  # claude code: truncate tool output above this
 
 # Unlimited history, shared between shells. bash < 4.3 treats -1 as 0.
 if (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3) )); then
