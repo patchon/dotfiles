@@ -1,169 +1,280 @@
-# If not running interactively, don't do anything
+# shellcheck shell=bash
+# ~/.bashrc: interactive bash configuration for linux and macos.
+#
+# Requires bash >= 4.3. macOS ships 3.2 in /bin/bash, so install a current one
+# with `brew install bash`. Terminals on macOS start login shells, which read
+# ~/.bash_profile, so that file must source this one.
+
+# Do nothing for non-interactive shells.
 case $- in
   *i*) ;;
-  *) return;;
+  *) return ;;
 esac
 
-# Source system wide bash related things
-[[ -f /etc/bashrc ]]          && source /etc/bashrc
-[[ -f /etc/bash_completion ]] && source /etc/bash_completion
+# Functions are defined before the aliases at the bottom on purpose: aliases
+# are expanded when a function body is parsed.
 
-# Android
-export ANDROID_SDK_ROOT=${HOME}/android/
-export ANDROID_HOME=${ANDROID_SDK_ROOT}
-export PATH="${ANDROID_SDK_ROOT}/platform-tools/:${PATH}"
-export PATH="/usr/share/android-studio/jre/bin/:${PATH}"
-export PATH="${HOME}/.gradle/wrapper/dists/gradle-5.4.1-all/3221gyojl5jsh0helicew7rwx/gradle-5.4.1/bin/:${PATH}"
+#######################################
+# Print a message to stderr.
+# Arguments:
+#   Message text
+#######################################
+err() {
+  echo "-> $*" >&2
+}
 
-# Claude
-export BASH_MAX_OUTPUT_LENGTH=15000
+#######################################
+# Prepend a directory to PATH if it exists and is not already in PATH.
+# Globals:
+#   PATH
+# Arguments:
+#   Directory, with or without trailing slash
+#######################################
+path_prepend() {
+  local dir="${1%/}"
+  [[ -d "${dir}" ]] || return 0
+  [[ ":${PATH}:" == *":${dir}:"* ]] && return 0
+  PATH="${dir}:${PATH}"
+}
 
-# Set envs
-export EDITOR='vim'
-export GOPATH=${HOME}/go
+#######################################
+# Load Homebrew's environment on macOS. Apple silicon installs to
+# /opt/homebrew, intel to /usr/local. No-op if already loaded.
+# Globals:
+#   HOMEBREW_PREFIX, PATH, MANPATH, INFOPATH
+#######################################
+setup_homebrew() {
+  local brew
+  [[ -n "${HOMEBREW_PREFIX}" ]] && return 0
+  for brew in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+    if [[ -x "${brew}" ]]; then
+      eval "$("${brew}" shellenv)"
+      return 0
+    fi
+  done
+  err "homebrew not found, see https://brew.sh"
+}
 
-# History
-export HISTFILESIZE=-1
-export HISTSIZE=-1
-export HISTCONTROL=ignoreboth:erasedups
-export HISTTIMEFORMAT="%F %T "
-shopt -s histappend
-PROMPT_COMMAND='history -a; history -n; '"$PROMPT_COMMAND"
+#######################################
+# Check whether an ssh-agent answers on SSH_AUTH_SOCK. ssh-add -l exits 0
+# (keys loaded), 1 (no keys) or 2 (no agent).
+# Globals:
+#   SSH_AUTH_SOCK
+# Returns:
+#   0 if an agent answers, 1 otherwise
+#######################################
+ssh_agent_alive() {
+  ssh-add -l &> /dev/null
+  (( $? != 2 ))
+}
 
-# Aliases
-alias ll='ls -ahlF --color=auto'
-alias agrep="/usr/bin/grep --color=auto --exclude-dir=.git -ri ${1}"
-alias grep="/usr/bin/grep --color=auto"
+#######################################
+# Make sure an ssh-agent is reachable through SSH_AUTH_SOCK. An agent that
+# already answers (launchd on macOS, systemd or gnome-keyring on linux) is
+# kept. Otherwise a private agent on a fixed socket is reused or started, so
+# that every shell shares one agent.
+# Globals:
+#   SSH_AUTH_SOCK, SSH_AGENT_PID
+#######################################
+setup_ssh_agent() {
+  local sock="${HOME}/.ssh/ssh-agent.sock"
 
-# Bash completion.
-if [[ -t 0 ]]; then   # only run if stdin is a terminal
-  bind "set completion-ignore-case on"
-  bind "set bell-style none"
-  bind "set show-all-if-ambiguous on"
-  bind "set visible-stats on"
-  complete -d cd rmdir
-  stty -ctlecho
-fi
+  [[ -n "${SSH_AUTH_SOCK}" ]] && ssh_agent_alive && return 0
 
-# Source vte profile if present
-if [[ -n "${TILIX_ID}" ]] || [[ -n "${VTE_VERSION}" ]]; then
-  file_vte="/etc/profile.d/vte.sh"
-
-  if [[ -f "${file_vte}" ]]; then
-    source "${file_vte}"
-  else
-    echo "-> missing ${file_vte}, sudo dnf install vte-profile ?"
+  if [[ -S "${sock}" ]]; then
+    export SSH_AUTH_SOCK="${sock}"
+    ssh_agent_alive && return 0
+    rm -f "${sock}"  # stale socket from a dead agent
   fi
-fi
 
-#export PS1="$ > "
-#export PS1="\[\e[34m\]$\[\e[0m\] \[\e[32m\]>\[\e[0m\] "
-# Source pureline,
-if [[ -f ~/dotfiles/pureline ]]; then
-  source ~/dotfiles/pureline ~/dotfiles/.pureline.conf
-fi
+  [[ -d "${HOME}/.ssh" ]] || mkdir -m 0700 "${HOME}/.ssh"
+  eval "$(ssh-agent -s -a "${sock}")" > /dev/null
+}
 
+#######################################
+# Add a private key to the agent unless it already holds keys.
+# Arguments:
+#   Path to private key
+#######################################
+add_ssh_key() {
+  local key="$1"
+  [[ -f "${key}" ]] || return 0
+  ssh-add -l &> /dev/null && return 0
+  ssh-add "${key}"
+}
 
-# Colors in manual pages
+#######################################
+# Point gpg-agent and git at the right binaries. gpg-agent on linux finds
+# /usr/bin/pinentry by itself; on macOS it needs pinentry-mac from Homebrew.
+# Files are only written when the current value differs.
+# Globals:
+#   HOMEBREW_PREFIX, OSTYPE
+#######################################
+setup_gpg() {
+  local gpg_bin pinentry
+  local conf="${HOME}/.gnupg/gpg-agent.conf"
+
+  gpg_bin=$(command -v gpg) || return 0
+
+  if [[ "${OSTYPE}" == darwin* ]]; then
+    pinentry="${HOMEBREW_PREFIX}/bin/pinentry-mac"
+    if [[ ! -x "${pinentry}" ]]; then
+      err "missing ${pinentry}, brew install pinentry-mac ?"
+    elif ! grep -qsx "pinentry-program ${pinentry}" "${conf}"; then
+      [[ -d "${HOME}/.gnupg" ]] || mkdir -m 0700 "${HOME}/.gnupg"
+      # Replace any old pinentry-program line, e.g. from an intel install.
+      { grep -vs '^pinentry-program ' "${conf}"
+        echo "pinentry-program ${pinentry}"; } > "${conf}.tmp" \
+        && mv "${conf}.tmp" "${conf}"
+      gpgconf --reload gpg-agent 2> /dev/null
+    fi
+  fi
+
+  if command -v git &> /dev/null \
+      && [[ "$(git config --global --get gpg.program)" != "${gpg_bin}" ]]; then
+    git config --global gpg.program "${gpg_bin}"
+  fi
+}
+
+#######################################
+# man with colored headings, bold and underlined text.
+# Arguments:
+#   Passed through to man
+#######################################
 man() {
-  env                                       \
-    LESS_TERMCAP_mb=$(printf "\e[1;31m")    \
-    LESS_TERMCAP_md=$(printf "\e[1;31m")    \
-    LESS_TERMCAP_me=$(printf "\e[0m")       \
-    LESS_TERMCAP_se=$(printf "\e[0m")       \
-    LESS_TERMCAP_so=$(printf "\e[1;44;33m") \
-    LESS_TERMCAP_ue=$(printf "\e[0m")       \
-    LESS_TERMCAP_us=$(printf "\e[1;32m")    \
-    man "$@"
+  LESS_TERMCAP_mb=$'\e[1;31m' \
+  LESS_TERMCAP_md=$'\e[1;31m' \
+  LESS_TERMCAP_me=$'\e[0m' \
+  LESS_TERMCAP_se=$'\e[0m' \
+  LESS_TERMCAP_so=$'\e[1;44;33m' \
+  LESS_TERMCAP_ue=$'\e[0m' \
+  LESS_TERMCAP_us=$'\e[1;32m' \
+  command man "$@"
 }
 
-# Hande to decode jwt tokens
-function jwt-decode() {
-  sed 's/\./\n/g' <<< $(cut -d. -f1,2 <<< "${1}") | base64 --decode | jq
+#######################################
+# Decode and pretty-print the header and payload of a JWT.
+# Arguments:
+#   Token; read from stdin when omitted
+# Outputs:
+#   Header and payload as JSON on stdout
+# Returns:
+#   0 on success, 1 on decode error, 2 on usage error
+#######################################
+jwt_decode() {
+  local token="${1:-}"
+  local part json
+  local -r pad='==='
+
+  [[ -z "${token}" && ! -t 0 ]] && read -r token
+  if [[ "${token}" != *.*.* ]]; then
+    err "usage: jwt_decode <header.payload.signature>"
+    return 2
+  fi
+
+  local header="${token%%.*}"
+  local rest="${token#*.}"
+  for part in "${header}" "${rest%%.*}"; do
+    # JWT uses unpadded base64url, base64(1) wants padded standard base64.
+    part="${part//-/+}"
+    part="${part//_//}"
+    part+="${pad:0:$(( (4 - ${#part} % 4) % 4 ))}"
+    if ! json=$(base64 -d <<< "${part}" 2> /dev/null); then
+      err "not a valid jwt: cannot decode '${part:0:12}...'"
+      return 1
+    fi
+    jq . <<< "${json}" || return 1
+  done
 }
 
-# Set pinentry/gpg depending on platform
-if [[ $(uname -s) == Darwin* ]];then
-  eval "$(/opt/homebrew/bin/brew shellenv)"
-  pinentry=$(echo $(brew --prefix)/bin/pinentry-mac)
-  gpg=$(echo $(brew --prefix)/bin/gpg)
+# System-wide settings. Fedora/RHEL and macOS ship /etc/bashrc; Debian's
+# /etc/bash.bashrc is sourced by bash itself.
+[[ -r /etc/bashrc ]] && source /etc/bashrc
 
-  export ANDROID_SDK_ROOT=${HOME}/Library/Android/sdk
-  export ANDROID_HOME=${ANDROID_SDK_ROOT}
+# Platform specifics. Homebrew first, everything below may need its binaries.
+if [[ "${OSTYPE}" == darwin* ]]; then
+  setup_homebrew
+  if [[ -r "${HOMEBREW_PREFIX}/etc/profile.d/bash_completion.sh" ]]; then
+    source "${HOMEBREW_PREFIX}/etc/profile.d/bash_completion.sh"
+  fi
+  export ANDROID_HOME="${HOME}/Library/Android/sdk"
 else
-  pinentry=$(which pinentry)
-  gpg=$(which gpg)
+  if [[ -r /usr/share/bash-completion/bash_completion ]]; then
+    source /usr/share/bash-completion/bash_completion
+  fi
+  export ANDROID_HOME="${HOME}/android"
+  # Android Studio 2023+ bundles its JDK in jbr/, older releases in jre/.
+  path_prepend /usr/share/android-studio/jbr/bin
+  path_prepend /usr/share/android-studio/jre/bin
 fi
+export ANDROID_SDK_ROOT="${ANDROID_HOME}"  # deprecated name, still read by some tools
 
-# Make sure we have cache/gnupg directories
-for dir in .cache .gnupg; do
-  if ! [[ -d ${HOME}/${dir} ]]; then
-    mkdir -v ${HOME}/${dir}
+path_prepend "${ANDROID_HOME}/platform-tools"
+path_prepend "${HOME}/go/bin"  # GOPATH defaults to ~/go since go 1.8
+path_prepend /opt/nanobrew/prefix/bin
+export PATH
 
-    if [[ "${dir}" == ".gnupg" ]]; then
-      if ! perms=$(stat -c '%a' ${dir} 2>&1); then
-        echo "-> failed to stat ${dir} : ${perms}"
-      else
-        if [[ "${perms}" != "700" ]]; then
-          chmod -v 700 "${dir}"
-        fi
-      fi
-    fi
-  fi
-done
+export EDITOR='vim'
+export BASH_MAX_OUTPUT_LENGTH=15000  # claude code: truncate tool output above this
 
-# Make sure we have gnupg related files and settings
-for file in "${HOME}/.gnupg/gpg.conf" "${HOME}/.gnupg/gpg-agent.conf"; do
-  if ! [[ -f "${file}" ]]; then
-    echo "-> creating ${file}"
-    touch "${file}"
-  fi
-
-  # Setup pinentry
-  if [[ "${file##*/}" == "gpg-agent.conf" ]]; then
-    str_pin="pinentry-program"
-    if ! grep "${str_pin}" -q "${file}"; then
-      echo "-> ${str_pin} not set in ${file}, will set"
-      echo "${str_pin} ${pinentry}" >> "${file}"
-    fi
-  fi
-
-  # Setup agent
-  if [[ "${file##*/}" == "gpg.conf" ]]; then
-    str_agent="use-agent"
-    if ! grep "${str_agent}" -q "${file}"; then
-      echo "${str_agent}" >> "${file}"
-    fi
-  fi
-done
-
-# Handle different gpg programs depending on what platform we are on
-if ! grep "program = ${gpg}" -q ${HOME}/.gitconfig; then
-  sed -i "s|\(program =\) .*|\1 ${gpg}|" ${HOME}/.gitconfig
-fi
-
-# Check for ssh-agent
-if pid=$(pgrep ssh-agent 2> /dev/null); then
-  # If its running, just set environment
-  export SSH_AGENT_PID=${pid}
-  export SSH_AUTH_SOCK=~/.ssh/ssh-agent.sock
+# Unlimited history, shared between shells. bash < 4.3 treats -1 as 0.
+if (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3) )); then
+  HISTSIZE=-1
+  HISTFILESIZE=-1
 else
-  # If not, remove old socket
-  rm -fv ~/.ssh/ssh-agent.sock
-  eval "$(ssh-agent -s -a ~/.ssh/ssh-agent.sock)" > /dev/null
+  HISTSIZE=100000
+  HISTFILESIZE=100000
+fi
+HISTCONTROL=ignoreboth:erasedups
+HISTTIMEFORMAT='%F %T '
+shopt -s histappend
+
+# Readline and tty settings, only when stdin is a terminal.
+if [[ -t 0 ]]; then
+  bind 'set completion-ignore-case on'
+  bind 'set bell-style none'
+  bind 'set show-all-if-ambiguous on'
+  bind 'set visible-stats on'
+  complete -d cd rmdir
+  stty -echoctl  # no ^C echo on ctrl-c; gnu also calls it ctlecho, bsd only echoctl
+  GPG_TTY=$(tty)
+  export GPG_TTY
 fi
 
-# Try to add key
-if ! ssh-add -l &> /dev/null; then
-  ssh-add ~/.ssh/id_ed25519
+# Terminal integration and prompt. Order matters: vte.sh overwrites
+# PROMPT_COMMAND and pureline wraps whatever is in it, so the history hook is
+# appended last. Fedora already sources vte.sh from /etc/bashrc, Debian/Ubuntu
+# (vte-2.91.sh) only do it for login shells.
+if [[ -n "${VTE_VERSION}" || -n "${TILIX_ID}" ]]; then
+  for vte_sh in /etc/profile.d/vte.sh /etc/profile.d/vte-2.91.sh; do
+    if [[ -r "${vte_sh}" ]]; then
+      source "${vte_sh}"
+      break
+    fi
+  done
+  unset vte_sh
 fi
 
-gpg-connect-agent /bye
-export GPG_TTY=$(tty)
+if [[ -r "${HOME}/dotfiles/pureline" ]]; then
+  source "${HOME}/dotfiles/pureline" "${HOME}/dotfiles/.pureline.conf"
+fi
 
-# nanobrew
-export PATH="/opt/nanobrew/prefix/bin:$PATH"
+# Write and re-read history at every prompt so shells share it.
+if [[ "${PROMPT_COMMAND}" != *'history -a'* ]]; then
+  PROMPT_COMMAND="${PROMPT_COMMAND:+${PROMPT_COMMAND}; }history -a; history -n"
+fi
 
-# Claude Status Bar Monitor
+setup_ssh_agent
+add_ssh_key "${HOME}/.ssh/id_ed25519"
+setup_gpg
+
+# Aliases. GNU ls takes --color, BSD ls (macOS) takes -G.
+if ls --color=auto -d / &> /dev/null; then
+  alias ll='ls -ahlF --color=auto'
+else
+  alias ll='ls -ahlFG'
+fi
+alias grep='grep --color=auto'
+alias agrep='grep --color=auto --exclude-dir=.git -ri'
 alias cs='claude-statusbar'
 alias cstatus='claude-statusbar'
