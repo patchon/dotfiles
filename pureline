@@ -1108,13 +1108,67 @@ __pureline_post() {
 }
 
 #######################################
+# Reads the ID field out of /etc/os-release, e.g. "fedora".
+# Outputs:
+#   Sets __pl_os_id; empty when the file has no ID or does not exist.
+#######################################
+__pl_os_release_id() {
+  local line
+  __pl_os_id=''
+  [[ -r /etc/os-release ]] || return
+  while IFS= read -r line; do
+    if [[ ${line} == ID=* ]]; then
+      __pl_os_id=${line#ID=}
+      __pl_os_id=${__pl_os_id//\"/}
+      return
+    fi
+  done < /etc/os-release
+}
+
+#######################################
+# Decides whether to render with a plain glyph set rather than the Nerd
+# Font one, and normalises PL_ASCII to exactly "true" or "false". An
+# explicit PL_ASCII is honoured; otherwise ASCII is chosen for the bare
+# Linux console and for any non-UTF-8 locale, where the glyphs cannot be
+# drawn. Runs before the config is sourced, so the config can read it.
+# Globals:
+#   PL_ASCII, TERM, LC_ALL, LC_CTYPE, LANG
+#######################################
+__pl_resolve_ascii() {
+  case ${PL_ASCII,,} in
+    true | 1 | yes | on) PL_ASCII=true; return ;;
+    false | 0 | no | off) PL_ASCII=false; return ;;
+  esac
+
+  local ctype=${LC_ALL:-${LC_CTYPE:-${LANG}}}
+  if [[ ${TERM} == linux ]] \
+      || [[ -n ${ctype} && ${ctype} != *[Uu][Tt][Ff]* ]]; then
+    PL_ASCII=true
+  else
+    PL_ASCII=false
+  fi
+}
+
+#######################################
 # Detects the running OS and picks its logo, once, at startup.
 # Globals:
-#   OSTYPE, PL_SYMBOLS
+#   OSTYPE, PL_SYMBOLS, PL_ASCII
 #######################################
 __pl_detect_os() {
   # Already set by the config? Leave it alone.
   [[ -n ${PL_SYMBOLS[os]} ]] && return
+
+  # Without a Nerd Font the logo would be tofu, so use a short text label:
+  # "mac", "win", or the distro id from /etc/os-release, else "linux".
+  if [[ ${PL_ASCII} == true ]]; then
+    case ${OSTYPE} in
+      darwin*) PL_SYMBOLS[os]='mac'; return ;;
+      msys* | cygwin* | win32) PL_SYMBOLS[os]='win'; return ;;
+    esac
+    __pl_os_release_id
+    PL_SYMBOLS[os]=${__pl_os_id:-linux}
+    return
+  fi
 
   case ${OSTYPE} in
     darwin*)
@@ -1232,6 +1286,7 @@ __pl_load_segments() {
 #######################################
 __pl_main() {
   __pl_supports_truecolor && __PL_TRUECOLOR=true
+  __pl_resolve_ascii
 
   __pl_set_base_colors
   __pl_set_default_symbols

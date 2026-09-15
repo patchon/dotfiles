@@ -67,3 +67,22 @@ Segment order and colours are the `PL_SEGMENTS` list in `.pureline.conf`.
 `pureline theme list` shows the palettes, `pureline theme test NAME` tries
 one in the current shell, and `pureline theme apply NAME` makes it the
 default.
+
+### Terminals without a Nerd Font
+
+On a terminal that cannot draw the icons (PuTTY without a Nerd Font, a bare
+Linux console), set `PL_ASCII=true` and the prompt falls back to plain-text
+separators and symbols, keeping the same segments, colours and layout.
+pureline turns this on by itself for the Linux console (`TERM=linux`) and for
+non-UTF-8 locales; `PL_ASCII=false` forces the Nerd Font glyphs back on, and
+`PL_ASCII=true` forces the plain set on.
+
+Set it per machine in `~/.bashrc.local`, which `.bashrc` sources before the
+prompt loads and which is never committed:
+
+```
+echo 'export PL_ASCII=true' >> ~/.bashrc.local
+```
+
+`~/.bashrc.local` is the shell counterpart of `~/.gitconfig.local`: the place
+for host-specific settings that should not live in the tracked files.

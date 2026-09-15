@@ -310,6 +310,11 @@ if [[ -t 0 ]]; then
   export GPG_TTY
 fi
 
+# Machine-specific settings that should not live in the tracked dotfiles.
+# Sourced before the prompt so that, for example, `export PL_ASCII=true` on a
+# terminal without a Nerd Font takes effect when pureline loads below.
+[[ -r "${HOME}/.bashrc.local" ]] && source "${HOME}/.bashrc.local"
+
 # Terminal integration and prompt. Order matters: vte.sh overwrites
 # PROMPT_COMMAND and pureline wraps whatever is in it, so the history hook is
 # appended last. Fedora already sources vte.sh from /etc/bashrc, Debian/Ubuntu
