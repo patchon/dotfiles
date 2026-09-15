@@ -1,0 +1,12 @@
+# Runtime state that vim writes into ~/.vim, which is a symlink into this repo.
+.vim/.netrwhist
+
+# Editor and OS droppings.
+*.swp
+*~
+.DS_Store
+
+# Local-only files.
+*.bak
+*.tmp
+.claude/settings.local.json
