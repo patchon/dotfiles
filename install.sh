@@ -15,8 +15,10 @@
 # created inside the repo.
 #
 # Usage:
-#   ./install.sh            create the links
-#   ./install.sh --dry-run  print what would be done, change nothing
+#   ./install.sh              create the links
+#   ./install.sh --dry-run    print what would be done, change nothing
+#   ./install.sh --no-claude  skip everything under .claude/, for machines
+#                             that do not run Claude Code
 #
 # Runs on bash 3.2, since it has to work before Homebrew's bash is installed.
 
@@ -25,6 +27,7 @@ set -euo pipefail
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_phys=$(cd "${repo}" && pwd -P)  # symlinks resolved, for containment tests
 dry_run=false
+skip_claude=false
 
 # Paths relative to both the repo and $HOME.
 LINKS=(
@@ -177,8 +180,9 @@ main() {
   for arg in "$@"; do
     case "${arg}" in
       --dry-run) dry_run=true ;;
+      --no-claude) skip_claude=true ;;
       *)
-        err "usage: install.sh [--dry-run]"
+        err "usage: install.sh [--dry-run] [--no-claude]"
         exit 2
         ;;
     esac
@@ -189,19 +193,23 @@ main() {
   fi
 
   for rel in "${LINKS[@]}"; do
+    if [[ "${skip_claude}" == true && "${rel}" == .claude/* ]]; then
+      echo "skip     ${HOME}/${rel} (--no-claude)"
+      continue
+    fi
     link "${rel}"
   done
   retire_ghostty_app_support_config
 
-  cat <<'EOF'
-
-Done. Per-machine steps that are not automated:
-  bash 4.3+        macOS ships 3.2: brew install bash; chsh -s /opt/homebrew/bin/bash
-  fonts            a Nerd Font, e.g. MesloLGS Nerd Font, for the prompt glyphs
-  gpg (macOS)      brew install gnupg pinentry-mac
-  Claude Code      brew install jq; .claude/scripts/sync-claude-settings.sh apply
-  git, per host    machine-specific settings go in ~/.gitconfig.local
-EOF
+  echo
+  echo "Done. Per-machine steps that are not automated:"
+  echo "  bash 4.3+        macOS ships 3.2: brew install bash; chsh -s /opt/homebrew/bin/bash"
+  echo "  fonts            a Nerd Font, e.g. MesloLGS Nerd Font, for the prompt glyphs"
+  echo "  gpg (macOS)      brew install gnupg pinentry-mac"
+  if [[ "${skip_claude}" != true ]]; then
+    echo "  Claude Code      brew install jq; .claude/scripts/sync-claude-settings.sh apply"
+  fi
+  echo "  git, per host    machine-specific settings go in ~/.gitconfig.local"
 }
 
 main "$@"

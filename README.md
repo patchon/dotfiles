@@ -25,7 +25,8 @@ git clone git@github.com:patchon/dotfiles.git ~/dotfiles
 
 The script is safe to run again. Anything already in the way is moved to
 `<name>.bak-<timestamp>`. `.bashrc` expects the repo at `~/dotfiles`.
-`./install.sh --dry-run` shows what it would do.
+`./install.sh --dry-run` shows what it would do, and `--no-claude` leaves
+out everything under `.claude/` on machines that do not run Claude Code.
 
 Then, per machine:
 
