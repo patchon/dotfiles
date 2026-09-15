@@ -16,9 +16,9 @@ cmap w!! w !sudo tee %
 
 " Everything vim writes for itself lives under ~/.cache/vim: backups, swap
 " and undo files in one directory each, so that only backups are ever
-" purged, and netrw's directory history. The trailing // makes vim encode
-" the full path into the file name, so same-named files in different
-" directories do not collide.
+" purged, plus netrw's directory history and the viminfo file. The
+" trailing // makes vim encode the full path into the file name, so
+" same-named files in different directories do not collide.
 let s:cache_dir = $HOME . '/.cache/vim'
 for s:sub in ['backup', 'swap', 'undo']
   call mkdir(s:cache_dir . '/' . s:sub, 'p', 0700)
@@ -29,6 +29,7 @@ set backupdir=~/.cache/vim/backup//
 set directory=~/.cache/vim/swap//
 set undodir=~/.cache/vim/undo//
 set undofile
+set viminfofile=~/.cache/vim/viminfo
 let g:netrw_home = s:cache_dir
 
 " Keep every version: the backup extension carries the time of the save.
