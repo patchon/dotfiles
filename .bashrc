@@ -301,9 +301,3 @@ else
 fi
 alias grep='grep --color=auto'
 alias agrep='grep --color=auto --exclude-dir=.git -ri'
-
-# Claude Code usage monitor, only where it is installed.
-if command -v claude-statusbar &> /dev/null; then
-  alias cs='claude-statusbar'
-  alias cstatus='claude-statusbar'
-fi
