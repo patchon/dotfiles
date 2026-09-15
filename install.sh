@@ -36,6 +36,7 @@ LINKS=(
   .gitconfig
   .vimrc
   .vim
+  .tmux.conf
   .config/ghostty/config
   .config/zed/settings.json
   .config/zed/keymap.json
