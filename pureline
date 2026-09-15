@@ -1222,8 +1222,8 @@ __pl_set_default_symbols() {
   PL_SYMBOLS=(
     [segment_head]=''      # no cap without a powerline font
     [segment_tail]=''      # no cap without a powerline font
-    [hard_separator]='▶'   # black right-pointing triangle
-    [soft_separator]='│'   # box-drawing vertical line
+    [hard_separator]='|'   # plain pipe; the config uses the powerline arrow
+    [soft_separator]='|'   # plain pipe; between same-colour segments
     [path_trimmed]='.../'  # marks a shortened path
     [read_only]='RO'       # directory is not writable
     [return_code]='x'      # last command failed
