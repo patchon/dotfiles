@@ -23,29 +23,17 @@
   algorithm = histogram
   colorMoved = plain
   mnemonicPrefix = true
-  tool = p4merge
 
 [fetch]
   all = true
   prune = true
   pruneTags = true
 
-[gpg]
-  program = /opt/homebrew/bin/gpg
-
 [help]
   autocorrect = prompt
 
 [merge]
   conflictstyle = zdiff3
-  tool = p4merge
-
-[mergetool]
-  prompt = false
-  keepBackup = false
-
-[mergetool "p4merge"]
-  trustExitCode = true
 
 [pull]
   rebase = true
@@ -74,3 +62,9 @@
 
 [advice]
   defaultBranchName = false
+
+# Machine-specific settings (gpg.program, diff/merge tools that are only
+# installed on some hosts) live in ~/.gitconfig.local, which is not tracked.
+# Last, so that it overrides anything above.
+[include]
+  path = ~/.gitconfig.local

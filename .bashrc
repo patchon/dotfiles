@@ -107,12 +107,17 @@ add_ssh_key() {
 # Point gpg-agent and git at the right binaries. gpg-agent on linux finds
 # /usr/bin/pinentry by itself; on macOS it needs pinentry-mac from Homebrew.
 # Files are only written when the current value differs.
+#
+# The gpg path goes into ~/.gitconfig.local, which ~/.gitconfig includes,
+# rather than into ~/.gitconfig itself: that file is a symlink into the
+# dotfiles repo, and writing a machine-specific path there dirties the repo.
 # Globals:
 #   HOMEBREW_PREFIX, OSTYPE
 #######################################
 setup_gpg() {
   local gpg_bin pinentry
   local conf="${HOME}/.gnupg/gpg-agent.conf"
+  local git_local="${HOME}/.gitconfig.local"
 
   gpg_bin=$(command -v gpg) || return 0
 
@@ -131,8 +136,8 @@ setup_gpg() {
   fi
 
   if command -v git &> /dev/null \
-      && [[ "$(git config --global --get gpg.program)" != "${gpg_bin}" ]]; then
-    git config --global gpg.program "${gpg_bin}"
+      && [[ "$(git config --file "${git_local}" --get gpg.program)" != "${gpg_bin}" ]]; then
+    git config --file "${git_local}" gpg.program "${gpg_bin}"
   fi
 }
 
