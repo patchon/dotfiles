@@ -9,7 +9,6 @@ between machines. Added two decades after everyone else.
 | --- | --- |
 | `.bashrc`, `.bash_profile` | Interactive shell: Homebrew, ssh-agent, gpg, history, PATH, aliases |
 | `pureline`, `segments/`, `.pureline.conf` | The prompt: a pure-bash Powerline that renders without forking |
-| `.config/starship.toml` | The starship theme the prompt is modelled on |
 | `.gitconfig` | Git defaults. Host-specific settings go in `~/.gitconfig.local` |
 | `.vimrc`, `.vim/` | Vim, with the badwolf colour scheme |
 | `.config/ghostty/config` | Ghostty terminal |

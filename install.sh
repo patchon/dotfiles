@@ -34,7 +34,6 @@ LINKS=(
   .vimrc
   .vim
   .config/ghostty/config
-  .config/starship.toml
   .config/zed/settings.json
   .config/zed/keymap.json
   .claude/scripts/statusline.sh

@@ -7,8 +7,8 @@
 #
 # This is a rewrite of that project. The segment model and the shape of the
 # configuration file are his; the rendering engine, the single-call git
-# parsing and the Catppuccin theme are new. It is styled after the starship
-# theme in starship.toml, but renders an order of magnitude faster by never
+# parsing and the Catppuccin theme are new. It is styled after a starship
+# Catppuccin theme, but renders an order of magnitude faster by never
 # forking a subshell while assembling the prompt.
 #
 # Usage, from ~/.bashrc:
