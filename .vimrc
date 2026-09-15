@@ -14,20 +14,30 @@ map ää :setlocal spell!<cr>
 " Never do sudo vim again,
 cmap w!! w !sudo tee %
 
-" Handle backups nicely
+" Backups, swap and undo files live under ~/.cache/.vim, one directory each,
+" so that only backups are ever purged. The trailing // makes vim encode the
+" full path into the file name, so same-named files in different directories
+" do not collide.
+let s:cache_dir = $HOME . '/.cache/.vim'
+for s:sub in ['backup', 'swap', 'undo']
+  call mkdir(s:cache_dir . '/' . s:sub, 'p', 0700)
+endfor
 set backup
-if !isdirectory($HOME."/.cache/.vim/")
-  silent! execute "!mkdir -p ~/.cache/.vim/"
-endif
-set backupdir=~/.cache/.vim//
-set directory=~/.cache/.vim//
-set undodir=~/.cache/.vim//
-set undofile
 set writebackup
-au BufWritePre * let &bex = '@' . strftime("%F.%H.%M")
+set backupdir=~/.cache/.vim/backup//
+set directory=~/.cache/.vim/swap//
+set undodir=~/.cache/.vim/undo//
+set undofile
 
-" Enable to have automatic purging:w
-"silent execute '!find $HOME/.vimtmp/backup -type f -mtime +7 -delete'
+" Keep every version: the backup extension carries the time of the save.
+au BufWritePre * let &backupext = '@' . strftime('%F.%H.%M')
+
+" Purge backups older than 30 days at startup.
+for s:file in glob(s:cache_dir . '/backup/*', 1, 1)
+  if getftime(s:file) < localtime() - 30 * 86400
+    call delete(s:file)
+  endif
+endfor
 
 " Set some reasonable defaults
 set autoindent            " Simple indent
