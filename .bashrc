@@ -231,6 +231,12 @@ export ANDROID_SDK_ROOT="${ANDROID_HOME}"  # deprecated name, still read by some
 
 path_prepend "${ANDROID_HOME}/platform-tools"
 path_prepend "${HOME}/go/bin"  # GOPATH defaults to ~/go since go 1.8
+path_prepend "${HOME}/.local/bin"  # pipx, uv tool and friends
+if [[ -d "${HOME}/.bun" ]]; then
+  export BUN_INSTALL="${HOME}/.bun"
+  path_prepend "${BUN_INSTALL}/bin"
+fi
+path_prepend "${HOME}/.antigravity/antigravity/bin"
 path_prepend /opt/nanobrew/prefix/bin
 export PATH
 
