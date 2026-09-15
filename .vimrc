@@ -14,20 +14,22 @@ map ää :setlocal spell!<cr>
 " Never do sudo vim again,
 cmap w!! w !sudo tee %
 
-" Backups, swap and undo files live under ~/.cache/.vim, one directory each,
-" so that only backups are ever purged. The trailing // makes vim encode the
-" full path into the file name, so same-named files in different directories
-" do not collide.
-let s:cache_dir = $HOME . '/.cache/.vim'
+" Everything vim writes for itself lives under ~/.cache/vim: backups, swap
+" and undo files in one directory each, so that only backups are ever
+" purged, and netrw's directory history. The trailing // makes vim encode
+" the full path into the file name, so same-named files in different
+" directories do not collide.
+let s:cache_dir = $HOME . '/.cache/vim'
 for s:sub in ['backup', 'swap', 'undo']
   call mkdir(s:cache_dir . '/' . s:sub, 'p', 0700)
 endfor
 set backup
 set writebackup
-set backupdir=~/.cache/.vim/backup//
-set directory=~/.cache/.vim/swap//
-set undodir=~/.cache/.vim/undo//
+set backupdir=~/.cache/vim/backup//
+set directory=~/.cache/vim/swap//
+set undodir=~/.cache/vim/undo//
 set undofile
+let g:netrw_home = s:cache_dir
 
 " Keep every version: the backup extension carries the time of the save.
 au BufWritePre * let &backupext = '@' . strftime('%F.%H.%M')
