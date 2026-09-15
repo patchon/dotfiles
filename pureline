@@ -1225,11 +1225,12 @@ __pl_load_segments() {
 }
 
 #######################################
-# Entry point. Sourced with an optional path to a config file.
+# Entry point. Sourced with an optional path to a config file. Removed again
+# after it has run, so the interactive shell is not left with a 'main'.
 # Arguments:
 #   $1: path to a pureline config file.
 #######################################
-main() {
+__pl_main() {
   __pl_supports_truecolor && __PL_TRUECOLOR=true
 
   __pl_set_base_colors
@@ -1275,4 +1276,5 @@ main() {
   fi
 }
 
-main "$@"
+__pl_main "$@"
+unset -f __pl_main
