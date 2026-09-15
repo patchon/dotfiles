@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+#
+# shellcheck disable=SC2154  # $container is set by the container engine
+# container_segment - shown only when the shell runs inside a container.
+#
+# Detection runs once, when pureline is sourced: a shell cannot leave a
+# container without being replaced, so there is nothing to re-check at every
+# prompt. Three tests, all free:
+#   1. /run/.containerenv exists: a podman container, which is also what
+#      toolbox and distrobox use. For --privileged containers, and those two
+#      run that way, podman writes name="..." into the file and that name is
+#      shown. Otherwise the engine name from $container is.
+#   2. /.dockerenv exists: docker.
+#   3. $container is set: systemd-nspawn, lxc and others export it.
+# None of them fire on a plain host or on WSL.
+
+[[ -z ${PL_SYMBOLS[container]} ]] && PL_SYMBOLS[container]='container'
+
+__PL_CONTAINER_NAME=''
+
+#######################################
+# Works out whether this shell is inside a container, and what to call it.
+# Globals:
+#   container, __PL_CONTAINER_NAME
+# Arguments:
+#   $1: podman's marker file, defaults to /run/.containerenv.
+#   $2: docker's marker file, defaults to /.dockerenv.
+# Outputs:
+#   Sets __PL_CONTAINER_NAME; empty when not in a container.
+# Returns:
+#   0 if in a container, 1 otherwise.
+#######################################
+__pl_container_detect() {
+  local podman_env=${1:-/run/.containerenv}
+  local docker_env=${2:-/.dockerenv}
+  local line name=''
+
+  __PL_CONTAINER_NAME=''
+
+  if [[ -e ${podman_env} ]]; then
+    if [[ -r ${podman_env} ]]; then
+      while IFS= read -r line || [[ -n ${line} ]]; do
+        if [[ ${line} == name=* ]]; then
+          name=${line#name=}
+          name=${name#\"}
+          name=${name%\"}
+          break
+        fi
+      done < "${podman_env}"
+    fi
+    __PL_CONTAINER_NAME=${name:-${container:-podman}}
+  elif [[ -e ${docker_env} ]]; then
+    __PL_CONTAINER_NAME=docker
+  elif [[ -n ${container} ]]; then
+    __PL_CONTAINER_NAME=${container}
+  fi
+
+  [[ -n ${__PL_CONTAINER_NAME} ]]
+}
+
+#######################################
+# Appends the container icon and name.
+# Globals:
+#   __PL_CONTAINER_NAME, PL_SYMBOLS
+# Arguments:
+#   $1: background colour name.
+#   $2: foreground colour name.
+#######################################
+container_segment() {
+  [[ -z ${__PL_CONTAINER_NAME} ]] && return 0
+  pl_add_segment "$1" "$2" " ${PL_SYMBOLS[container]} ${__PL_CONTAINER_NAME} "
+}
+
+__pl_container_detect
