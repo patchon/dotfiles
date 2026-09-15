@@ -68,3 +68,10 @@ keybind = cmd+left=text:\x1bb
 keybind = cmd+right=text:\x1bf
 
 scrollback-limit = 50000000
+
+# The Claude Code status line draws its meters with U+25C9..U+25D5 (circle
+# glyphs). The Nerd Font renders them too small, Menlo has them at the right
+# size.
+font-codepoint-map = U+25C9-U+25D5=Menlo
+
+link-previews = false
