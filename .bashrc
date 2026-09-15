@@ -207,6 +207,50 @@ jwt_decode() {
   done
 }
 
+#######################################
+# Test whether a TCP port accepts connections, using bash's own /dev/tcp so
+# it works on hosts without nc, nmap or curl. The connect runs in a
+# background subshell because bash cannot give connect() a timeout itself;
+# the outer subshell keeps job-control chatter out of an interactive shell.
+# Arguments:
+#   Host name or address
+#   Port number
+#   Timeout in whole seconds, default 3
+# Outputs:
+#   "<host>:<port> open", "closed" or "no answer in <n>s" on stdout
+# Returns:
+#   0 if the port accepts a connection, 1 if not, 2 on usage error
+#######################################
+check_tcp_port() {
+  local host="${1:-}" port="${2:-}" timeout="${3:-3}"
+  local -r usage='usage: check_tcp_port <host> <port> [timeout-seconds]'
+
+  if [[ -z "${host}" || ! "${port}" =~ ^[0-9]+$ || ! "${timeout}" =~ ^[0-9]+$ ]] \
+      || (( port < 1 || port > 65535 )); then
+    err "${usage}"
+    return 2
+  fi
+
+  (
+    ( exec 3<> "/dev/tcp/${host}/${port}" ) 2> /dev/null &
+    pid=$!
+    for (( i = 0; i < timeout * 10; i++ )); do
+      kill -0 "${pid}" 2> /dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "${pid}" 2> /dev/null; then
+      kill "${pid}" 2> /dev/null
+      exit 124
+    fi
+    wait "${pid}"
+  )
+  case $? in
+    0) echo "${host}:${port} open" ;;
+    124) echo "${host}:${port} no answer in ${timeout}s"; return 1 ;;
+    *) echo "${host}:${port} closed"; return 1 ;;
+  esac
+}
+
 # System-wide settings. Fedora/RHEL and macOS ship /etc/bashrc; Debian's
 # /etc/bash.bashrc is sourced by bash itself.
 [[ -r /etc/bashrc ]] && source /etc/bashrc
