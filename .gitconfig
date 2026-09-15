@@ -1,0 +1,78 @@
+[alias]
+  b       = branch -vv
+  co      = "!f() { git switch \"$1\" 2>/dev/null || git switch -c \"$1\"; }; f"
+  commit  = commit -v
+  st      = status
+  unstage = reset HEAD --
+
+[branch]
+  sort = -committerdate
+
+[commit]
+  gpgSign = true
+  verbose = true
+
+[core]
+  #pager         = diff-highlight | less -R
+  autcrlf       = input
+  editor        = vim
+  fsmonitor = true
+  untrackedCache = true
+  whitespace    = cr-at-eol
+
+[diff]
+  algorithm = histogram
+  colorMoved = plain
+  mnemonicPrefix = true
+  tool = p4merge
+
+[fetch]
+  all = true
+  prune = true
+  pruneTags = true
+
+[gpg]
+  program = /opt/homebrew/bin/gpg
+
+[help]
+  autocorrect = prompt
+
+[merge]
+  conflictstyle = zdiff3
+  tool = p4merge
+
+[mergetool]
+  prompt = false
+  keepBackup = false
+
+[mergetool "p4merge"]
+  trustExitCode = true
+
+[pull]
+  rebase = true
+
+[push]
+  #default = upstream
+  autoSetupRemote = true
+  #default = simple
+  followTags = true
+
+[rebase]
+  autoSquash = true
+  autoStash = true
+  updateRefs = true
+
+[rerere]
+  enabled = true
+  autoupdate = true
+
+[tag]
+  gpgSign = true
+  sort = version:refname
+
+[user]
+  email = patrik@redlin.se
+  name = "Patrik Martinsson"
+  signingkey = 34D050E6196164D28DB527BA9233DCB79B567F05
+[advice]
+	defaultBranchName = false

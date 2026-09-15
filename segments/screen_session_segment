@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+#
+# screen_session_segment - the GNU screen session name.
+
+[[ -z ${PL_SYMBOLS[screen]} ]] && PL_SYMBOLS[screen]='screen'
+
+#######################################
+# Appends the screen session name.
+# Globals:
+#   TERM, STY, PL_SYMBOLS
+# Arguments:
+#   $1: background colour name.
+#   $2: foreground colour name.
+#######################################
+screen_session_segment() {
+  [[ ${TERM} != screen* || -z ${STY} ]] && return 0
+  pl_add_segment "$1" "$2" " ${PL_SYMBOLS[screen]} ${STY} "
+}

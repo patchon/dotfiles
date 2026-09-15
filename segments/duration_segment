@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+#
+# duration_segment - how long the previous command took.
+#
+# Timing is collected by the DEBUG trap pureline installs, which reads
+# $EPOCHREALTIME. The original implementation called 'date +%s%N' from that
+# trap, forking a process before every single command typed at the prompt --
+# and BSD date has no %N, so on macOS it produced a literal 'N' and the
+# arithmetic was meaningless. $EPOCHREALTIME is a bash 5 builtin and free.
+
+[[ -z ${PL_SYMBOLS[duration]} ]] && PL_SYMBOLS[duration]='~'
+
+#######################################
+# Formats a microsecond count the way starship's cmd_duration does.
+# Arguments:
+#   $1: elapsed microseconds.
+# Outputs:
+#   Sets __pl_duration_text.
+#######################################
+__pl_duration_format() {
+  local -i total=$1
+  local -i hours minutes seconds millis
+
+  millis=$(( total / 1000 ))
+  seconds=$(( millis / 1000 ))
+  minutes=$(( seconds / 60 ))
+  hours=$(( minutes / 60 ))
+
+  if (( hours > 0 )); then
+    __pl_duration_text="${hours}h$(( minutes % 60 ))m$(( seconds % 60 ))s"
+  elif (( minutes > 0 )); then
+    __pl_duration_text="${minutes}m$(( seconds % 60 ))s"
+  elif (( seconds > 0 )); then
+    printf -v __pl_duration_text '%d.%03ds' \
+        "${seconds}" "$(( millis % 1000 ))"
+  else
+    __pl_duration_text="${millis}ms"
+  fi
+}
+
+#######################################
+# Appends the duration of the previous command, when it ran long enough to
+# be worth reporting.
+# Globals:
+#   __pl_cmd_start, EPOCHREALTIME, PL_DURATION_MIN_MS, PL_SYMBOLS
+# Arguments:
+#   $1: background colour name.
+#   $2: foreground colour name.
+#######################################
+duration_segment() {
+  [[ -z ${__pl_cmd_start} ]] && return 0
+
+  local -i now elapsed
+  # The decimal separator in EPOCHREALTIME follows the locale.
+  now=${EPOCHREALTIME/[.,]/}
+  elapsed=$(( now - __pl_cmd_start ))
+
+  (( elapsed < 0 )) && return 0
+  (( elapsed / 1000 < ${PL_DURATION_MIN_MS:-2000} )) && return 0
+
+  __pl_duration_format "${elapsed}"
+  pl_add_segment "$1" "$2" " ${PL_SYMBOLS[duration]} ${__pl_duration_text} "
+}

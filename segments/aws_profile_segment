@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+#
+# aws_profile_segment - the selected AWS profile.
+
+[[ -z ${PL_SYMBOLS[aws_profile]} ]] && PL_SYMBOLS[aws_profile]='aws'
+
+#######################################
+# Appends the AWS profile name.
+# Globals:
+#   AWS_PROFILE, AWS_DEFAULT_PROFILE, PL_SYMBOLS
+# Arguments:
+#   $1: background colour name.
+#   $2: foreground colour name.
+#######################################
+aws_profile_segment() {
+  local profile=${AWS_PROFILE:-${AWS_DEFAULT_PROFILE}}
+  [[ -z ${profile} ]] && return 0
+  pl_add_segment "$1" "$2" " ${PL_SYMBOLS[aws_profile]} ${profile} "
+}

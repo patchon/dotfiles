@@ -1,0 +1,91 @@
+{
+  "agent_ui_font_size": 15.0,
+  "autosave": {
+    "after_delay": {
+      "milliseconds": 100,
+    },
+  },
+  "buffer_font_size": 10.0,
+  "buffer_font_weight": 400.0,
+  "buffer_font_family": "MesloLGSDZ Nerd Font",
+  "agent": {
+    "favorite_models": [
+      {
+        "provider": "google",
+        "model": "gemini-3-pro-preview"
+      }
+    ],
+    "inline_assistant_model": {
+      "provider": "google",
+      "model": "gemini-3-flash-preview",
+    },
+    "always_allow_tool_actions": true,
+    "default_model": {
+      "model": "gemini-3-pro-preview",
+      "provider": "google",
+    },
+  },
+  "buffer_line_height": "standard",
+  "collaboration_panel": {
+    "button": false,
+  },
+  "colorize_brackets": true,
+  "icon_theme": "Colored Zed Icons Theme Dark",
+  "indent_guides": {
+    "coloring": "indent_aware",
+  },
+  "languages": {
+    "Python": {
+      "language_servers": [
+        "ty",
+        "ruff",
+        "!basedpyright",
+        "!pyrefly",
+        "!pyright",
+        "!pylsp",
+      ],
+      "code_actions_on_format": {
+        "source.fixAll.ruff": true,
+      },
+      "tab_size": 4,
+    },
+  },
+  "lsp_document_colors": "inlay",
+  "restore_on_startup": "last_session",
+  "scrollbar": {
+    "show": "always",
+  },
+  "search": {
+    "button": false,
+    "case_sensitive": true,
+    "center_on_match": true,
+  },
+  "show_whitespaces": "selection",
+  "sticky_scroll": {
+    "enabled": true,
+  },
+  "tab_size": 2,
+  "tabs": {
+    "show_diagnostics": "all",
+    "file_icons": true,
+    "git_status": true,
+  },
+  "title_bar": {
+    "show_branch_icon": true,
+  },
+  "telemetry": {
+    "metrics": false,
+    "diagnostics": false,
+  },
+  "terminal": {
+    "font_size": 9.0,
+    "cursor_shape": "bar",
+    "font_family": "MesloLGM Nerd Font",
+    "max_scroll_history_lines": 100000,
+  },
+  "theme": "Tokyo Night",
+  "ui_font_size": 14.0,
+  "use_system_window_tabs": true,
+  "vim_mode": true,
+  "wrap_guides": [80],
+}

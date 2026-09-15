@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+#
+# pwd_segment - the working directory, rendered with separators between the
+# path components instead of slashes.
+#
+# path_segment (built into pureline) is the one that matches the starship
+# theme. This is the alternative arrow style, kept for people who prefer it.
+
+[[ -z ${PL_SYMBOLS[pwd_separator]} ]] &&
+    PL_SYMBOLS[pwd_separator]=${PL_SYMBOLS[soft_separator]}
+[[ -z ${PL_SYMBOLS[pwd_trimmed]} ]] && PL_SYMBOLS[pwd_trimmed]='...'
+
+#######################################
+# Appends the working directory, one component at a time.
+# Globals:
+#   PWD, HOME, PL_PATH_TRIM, PL_PATH_ALIASES, PL_SYMBOLS
+# Arguments:
+#   $1: background colour name.
+#   $2: foreground colour name.
+#######################################
+pwd_segment() {
+  local path=${PWD}
+  local -a parts
+  local -i trim=${PL_PATH_TRIM:-0}
+  local -i count keep index
+  local part content=''
+  local separator=" ${PL_SYMBOLS[pwd_separator]} "
+
+  if [[ -n ${HOME} && ${HOME} != / ]]; then
+    if [[ ${path} == "${HOME}" ]]; then
+      path='~'
+    elif [[ ${path} == "${HOME}"/* ]]; then
+      path="~${path#"${HOME}"}"
+    fi
+  fi
+
+  if [[ ${path} == / ]]; then
+    pl_add_segment "$1" "$2" ' / '
+    return
+  fi
+
+  IFS=/ read -ra parts <<< "${path}"
+  count=${#parts[@]}
+
+  if (( trim == 1 )); then
+    keep=1
+  elif (( trim > 1 && count > trim )); then
+    keep=${trim}
+  else
+    keep=${count}
+  fi
+
+  for (( index = count - keep; index < count; index++ )); do
+    part=${parts[index]}
+    [[ -z ${part} ]] && continue
+    [[ -n ${PL_PATH_ALIASES[${part}]+set} ]] && part=${PL_PATH_ALIASES[${part}]}
+    if [[ -z ${content} ]]; then
+      content=${part}
+    else
+      content+="${separator}${part}"
+    fi
+  done
+
+  if (( keep < count )); then
+    content="${PL_SYMBOLS[pwd_trimmed]}${separator}${content}"
+  elif [[ ${parts[0]} == '' ]]; then
+    content="/${content}"
+  fi
+
+  pl_add_segment "$1" "$2" " ${content:-/} "
+}
