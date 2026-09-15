@@ -13,12 +13,11 @@
   verbose = true
 
 [core]
-  #pager         = diff-highlight | less -R
-  autocrlf      = input
-  editor        = vim
-  fsmonitor = true
+  autocrlf       = input
+  editor         = vim
+  fsmonitor      = true
   untrackedCache = true
-  whitespace    = cr-at-eol
+  whitespace     = cr-at-eol
 
 [diff]
   algorithm = histogram
@@ -52,9 +51,7 @@
   rebase = true
 
 [push]
-  #default = upstream
   autoSetupRemote = true
-  #default = simple
   followTags = true
 
 [rebase]
@@ -74,5 +71,6 @@
   email = patrik@redlin.se
   name = "Patrik Martinsson"
   signingkey = 34D050E6196164D28DB527BA9233DCB79B567F05
+
 [advice]
-	defaultBranchName = false
+  defaultBranchName = false
