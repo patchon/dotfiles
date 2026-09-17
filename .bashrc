@@ -255,6 +255,357 @@ check_tcp_port() {
   esac
 }
 
+#######################################
+# Show the certificates a TLS server sends and check that the chain is set up
+# the way clients expect: the server certificate first, then every
+# intermediate in signing order, no root, and a chain that verifies against
+# the local trust store. Browsers hide a missing intermediate by fetching it
+# themselves; curl, java and most libraries do not, so servers get this wrong
+# without anyone noticing.
+#
+# The trust store is whatever openssl uses by default, so the verdict matches
+# openssl on the same machine. SSL_CERT_FILE=bundle.pem or SSL_CERT_DIR=dir
+# names another store; openssl still adds its default directory and Apple's
+# LibreSSL its keychain roots, so a bundle cannot make a public root untrusted.
+# The hostname check and the "your store had the intermediate" detection need
+# OpenSSL 1.1.1+ and are skipped on LibreSSL. The connect timeout comes from
+# check_tcp_port, since s_client has none; a port that accepts the connection
+# but never answers hangs until ctrl-c.
+# Globals:
+#   NO_COLOR, OSTYPE, SSL_CERT_DIR, SSL_CERT_FILE
+# Arguments:
+#   Host name or address
+#   Port number, default 443
+# Outputs:
+#   Every certificate sent, then one ok/warn/FAIL line per check, on stdout
+# Returns:
+#   0 if every check passes, 1 if one fails or no TLS session was made,
+#   2 on usage error
+#######################################
+check_tls_chain() {
+  local host="${1:-}" port="${2:-443}"
+  local -r usage='usage: check_tls_chain <host> [port]'
+  local -r nameopt='RFC2253,sep_comma_plus_space,-esc_msb'
+  local answer raw line info ssl_lib ssl_dir store now epoch days when plural
+  local i j k n top next aia detail broken entry status name rest colour cont
+  local missing unit
+  local proto='' new_proto='' cipher='' vcode='' vtext='' pem='' in_pem=false
+  local checkname='-checkhost' connect="${host}:${port}" failed=0
+  local bold='' dim='' red='' green='' yellow='' cyan='' reset=''
+  local -a certs=() subject=() issuer=() notafter=() role=() checks=()
+  local -a sni=() verify_opts=() supplied=()
+
+  if [[ -z "${host}" || ! "${port}" =~ ^[1-9][0-9]{0,4}$ ]] || (( port > 65535 )); then
+    err "${usage}"
+    return 2
+  fi
+  if ! command -v openssl &> /dev/null; then
+    err 'openssl not found'
+    return 1
+  fi
+  if [[ -n "${SSL_CERT_FILE:-}" && ! -r "${SSL_CERT_FILE}" ]]; then
+    err "cannot read SSL_CERT_FILE=${SSL_CERT_FILE}"
+    return 1
+  fi
+  if [[ -n "${SSL_CERT_DIR:-}" && ! -d "${SSL_CERT_DIR}" ]]; then
+    err "SSL_CERT_DIR=${SSL_CERT_DIR} is not a directory"
+    return 1
+  fi
+  if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+    bold=$'\e[1m' dim=$'\e[2m' red=$'\e[31m' green=$'\e[32m'
+    yellow=$'\e[33m' cyan=$'\e[36m' reset=$'\e[0m'
+  fi
+
+  # SNI must not be an IP literal (RFC 6066), and an IP is matched against the
+  # certificate's IP entries rather than its DNS names.
+  if [[ "${host}" =~ ^[0-9]+(\.[0-9]+){3}$ || "${host}" == *:* ]]; then
+    checkname='-checkip'
+    [[ "${host}" == *:* ]] && connect="[${host}]:${port}"
+  else
+    sni=(-servername "${host}")
+  fi
+
+  if ! answer=$(check_tcp_port "${host}" "${port}"); then
+    err "${answer}"
+    return 1
+  fi
+  raw=$(openssl s_client -connect "${connect}" "${sni[@]}" -showcerts < /dev/null 2>&1)
+  if [[ "${raw}" != *'-----BEGIN CERTIFICATE-----'* ]]; then
+    err "no certificate from ${host}:${port}"
+    while IFS= read -r line; do
+      err "  ${line}"
+    done < <(grep -E ':error:|alert' <<< "${raw}" | head -n 5)
+    return 1
+  fi
+
+  # Collect the PEM blocks in the order sent, plus the protocol and cipher.
+  # OpenSSL 3 prints "Protocol: X" and "New, X, Cipher is Y" for every
+  # session but the "Protocol  : X" / "Cipher    : Y" block only for TLS 1.2;
+  # LibreSSL prints the block but says TLSv1/SSLv3 on the "New," line.
+  while IFS= read -r line; do
+    if [[ "${in_pem}" == true ]]; then
+      pem+=$'\n'"${line}"
+      if [[ "${line}" == '-----END CERTIFICATE-----' ]]; then
+        certs+=("${pem}")
+        in_pem=false
+      fi
+    else
+      case "${line}" in
+        '-----BEGIN CERTIFICATE-----') pem="${line}"; in_pem=true ;;
+        'Protocol: '*|*'Protocol  : '*) proto="${line##*: }" ;;
+        *'Cipher    : '*) cipher="${line##*: }" ;;
+        'New, '*', Cipher is '*)
+          cipher="${line##*Cipher is }"
+          new_proto="${line#New, }"
+          new_proto="${new_proto%%,*}"
+          ;;
+      esac
+    fi
+  done <<< "${raw}"
+  [[ -z "${proto}" && "${new_proto}" != */* ]] && proto="${new_proto}"
+  n="${#certs[@]}"
+  if (( n == 0 )); then
+    err "no complete certificate from ${host}:${port}"
+    return 1
+  fi
+
+  # RFC2253 order (CN first) prints the same on OpenSSL and LibreSSL and is
+  # what the checks below compare; -esc_msb keeps non-ASCII names readable.
+  for (( i = 0; i < n; i++ )); do
+    subject[i]='' issuer[i]='' notafter[i]=''
+    info=$(openssl x509 -noout -subject -issuer -enddate -nameopt "${nameopt}" \
+      <<< "${certs[i]}" 2> /dev/null)
+    while IFS= read -r line; do
+      case "${line}" in
+        subject=*) line="${line#subject=}"; subject[i]="${line# }" ;;
+        issuer=*) line="${line#issuer=}"; issuer[i]="${line# }" ;;
+        notAfter=*) notafter[i]="${line#notAfter=}" ;;
+      esac
+    done <<< "${info}"
+  done
+
+  # Roles come from the signing links, not the position, so a misordered
+  # chain is still labelled right and the order check below can say so.
+  for (( i = 0; i < n; i++ )); do
+    if [[ "${subject[i]}" == "${issuer[i]}" ]]; then
+      role[i]=root
+      (( i == 0 )) && role[i]=self-signed
+      continue
+    fi
+    role[i]=leaf
+    for (( j = 0; j < n; j++ )); do
+      if (( j != i )) && [[ "${issuer[j]}" == "${subject[i]}" ]]; then
+        role[i]=intermediate
+        break
+      fi
+    done
+  done
+
+  # Follow the issuer links up from certificate 0 to the top of the chain the
+  # server actually delivered. Bounded by n so a looping chain cannot hang it.
+  top=0
+  for (( k = 0; k < n; k++ )); do
+    next=''
+    for (( j = 0; j < n; j++ )); do
+      if (( j != top )) && [[ "${subject[j]}" == "${issuer[top]}" ]]; then
+        next="${j}"
+        break
+      fi
+    done
+    [[ -n "${next}" ]] || break
+    top="${next}"
+  done
+
+  plural=s
+  (( n == 1 )) && plural=''
+  printf '%s%s:%s%s  %s  %s  %d certificate%s sent\n' "${bold}" "${host}" "${port}" \
+    "${reset}" "${proto:-?}" "${cipher:-?}" "${n}" "${plural}"
+  echo
+
+  now=$(date +%s)
+  for (( i = 0; i < n; i++ )); do
+    # LC_ALL=C: openssl prints English month names whatever the locale is.
+    if [[ "${OSTYPE}" == darwin* ]]; then
+      epoch=$(LC_ALL=C date -j -u -f '%b %e %H:%M:%S %Y %Z' "${notafter[i]}" +%s \
+        2> /dev/null)
+    else
+      epoch=$(LC_ALL=C date -u -d "${notafter[i]}" +%s 2> /dev/null)
+    fi
+    when=''
+    if [[ -n "${epoch}" ]]; then
+      days=$(( (epoch - now) / 86400 ))
+      unit=days
+      (( days == 1 || days == -1 )) && unit=day
+      if (( epoch < now )); then
+        when="  ${red}(expired $(( -days )) ${unit} ago)${reset}"
+      elif (( days < 30 )); then
+        when="  ${yellow}(expires in ${days} ${unit})${reset}"
+      else
+        when="  ${green}(${days} ${unit})${reset}"
+      fi
+    fi
+    printf ' %s[%d] %s%s\n' "${cyan}${bold}" "${i}" "${role[i]}" "${reset}"
+    printf '     %ssubject%s   %s\n' "${dim}" "${reset}" "${subject[i]}"
+    printf '     %sissuer%s    %s\n' "${dim}" "${reset}" "${issuer[i]}"
+    printf '     %snotAfter%s  %s%s\n' "${dim}" "${reset}" "${notafter[i]}" "${when}"
+  done
+  echo
+
+  if [[ -n "${SSL_CERT_FILE:-}" ]]; then
+    store="${SSL_CERT_FILE} (SSL_CERT_FILE)"
+  elif [[ -n "${SSL_CERT_DIR:-}" ]]; then
+    store="${SSL_CERT_DIR} (SSL_CERT_DIR)"
+  else
+    ssl_dir=$(openssl version -d)  # OPENSSLDIR: "/opt/homebrew/etc/openssl@3"
+    ssl_dir="${ssl_dir#*\"}"
+    ssl_dir="${ssl_dir%\"*}"
+    if [[ -f "${ssl_dir}/cert.pem" ]]; then
+      store="${ssl_dir}/cert.pem"
+    elif [[ -d "${ssl_dir}/certs" ]]; then
+      store="${ssl_dir}/certs"
+    else
+      store="${ssl_dir}"
+    fi
+  fi
+
+  # Each check is "status name detail"; detail may span lines.
+  ssl_lib=$(openssl version)
+  if [[ "${ssl_lib}" == LibreSSL* ]]; then
+    checks+=("skip hostname needs OpenSSL 1.1.1+, this is ${ssl_lib}")
+  else
+    # Only OpenSSL 3.2+ reports the outcome in the exit status; the printed
+    # text has been stable since 1.1.1.
+    detail=$(openssl x509 -noout "${checkname}" "${host}" <<< "${certs[0]}" 2> /dev/null)
+    if [[ "${detail}" == *' does match certificate'* ]]; then
+      checks+=("ok hostname ${host} matches certificate 0")
+    else
+      checks+=("FAIL hostname ${host} does not match certificate 0")
+    fi
+  fi
+
+  if (( n == 1 )); then
+    checks+=("ok order single certificate")
+  else
+    broken=''
+    for (( i = 0; i < n - 1; i++ )); do
+      if [[ "${issuer[i]}" != "${subject[i + 1]}" ]]; then
+        broken="certificate ${i} is not issued by certificate $(( i + 1 ))"
+        break
+      fi
+    done
+    if [[ -n "${broken}" ]]; then
+      checks+=("FAIL order ${broken}")
+    else
+      checks+=("ok order each certificate is issued by the next one")
+    fi
+  fi
+
+  detail=''
+  for (( i = 0; i < n; i++ )); do
+    if [[ "${role[i]}" == root ]]; then
+      detail="certificate ${i} is a self-signed root, send only the leaf and intermediates"
+    fi
+  done
+  if [[ -n "${detail}" ]]; then
+    checks+=("warn root ${detail}")
+  elif [[ "${role[0]}" == self-signed ]]; then
+    checks+=("warn root certificate 0 is self-signed, there is no chain to check")
+  else
+    checks+=("ok root not sent, as it should be")
+  fi
+
+  # The verdict comes from openssl verify rather than from s_client, because
+  # Apple's LibreSSL s_client verifies through the system trust store, which
+  # fetches missing intermediates itself and so never sees an incomplete
+  # chain. With -show_chain (OpenSSL only) the certificates that came from the
+  # server are tagged "(untrusted)"; the others came from the store.
+  # LibreSSL's verify ignores SSL_CERT_FILE and SSL_CERT_DIR, so name the
+  # store on the command line to get the same verdict from both flavours.
+  [[ "${ssl_lib}" == LibreSSL* ]] || verify_opts=(-show_chain -nameopt "${nameopt}")
+  [[ -n "${SSL_CERT_FILE:-}" ]] && verify_opts+=(-CAfile "${SSL_CERT_FILE}")
+  [[ -n "${SSL_CERT_DIR:-}" ]] && verify_opts+=(-CApath "${SSL_CERT_DIR}")
+  while IFS= read -r line; do
+    case "${line}" in
+      'depth='*)
+        [[ "${line}" == *' (untrusted)' ]] || supplied+=("${line#depth=*: }")
+        ;;
+      'error '*' depth lookup:'*)
+        if [[ -z "${vcode}" ]]; then
+          vtext="${line#error }"  # e.g. "20 at 0 depth lookup: unable to ..."
+          vcode="${vtext%% *}"
+          vtext="${vtext#*depth lookup:}"
+          vtext="${vtext# }"
+        fi
+        ;;
+      *': OK') vcode=0 ;;
+    esac
+  done < <(openssl verify "${verify_opts[@]}" -untrusted <(printf '%s\n' "${certs[@]}") \
+    <(printf '%s\n' "${certs[0]}") 2>&1)
+
+  case "${vcode}" in
+    0)
+      # openssl prefers the store's copy of an intermediate over the sent one,
+      # so a store entry below the anchor is only missing from the server when
+      # no sent certificate has its subject.
+      missing=''
+      for (( i = 0; i < ${#supplied[@]} - 1; i++ )); do
+        for (( j = 0; j < n; j++ )); do
+          [[ "${subject[j]}" == "${supplied[i]}" ]] && continue 2
+        done
+        missing="${supplied[i]}"
+        break
+      done
+      if [[ -n "${missing}" ]]; then
+        detail="supplied intermediate \"${missing}\", which other clients"
+        detail+=" will not have. the server should send it"
+        checks+=("warn trusted verifies, but only because ${store}"$'\n'"${detail}")
+      elif (( ${#supplied[@]} > 0 )); then
+        checks+=("ok trusted anchored by \"${supplied[-1]}\""$'\n'"in ${store}")
+      else
+        checks+=("ok trusted chain verifies against ${store}")
+      fi
+      ;;
+    20)
+      aia=$(openssl x509 -noout -text <<< "${certs[top]}" 2> /dev/null \
+        | grep -m 1 'CA Issuers - URI:')
+      aia="${aia#*URI:}"
+      detail="issuer \"${issuer[top]}\" of certificate ${top}"
+      detail+=" was neither sent nor found in"$'\n'"${store}"
+      detail+=$'\n'"the server is missing intermediate(s), or the CA is not trusted here"
+      [[ -n "${aia}" ]] && detail+=$'\n'"the issuer publishes it at ${aia}"
+      checks+=("FAIL trusted ${detail}")
+      ;;
+    19)
+      detail="root \"${subject[top]}\" was sent but is not in"$'\n'"${store}"
+      checks+=("FAIL trusted ${detail}")
+      ;;
+    18)
+      detail="certificate 0 is self-signed and not in"$'\n'"${store}"
+      checks+=("FAIL trusted ${detail}")
+      ;;
+    10) checks+=("FAIL trusted a certificate has expired, see notAfter above") ;;
+    '') checks+=("FAIL trusted openssl verify gave no result") ;;
+    *) checks+=("FAIL trusted verify error ${vcode}: ${vtext}") ;;
+  esac
+
+  printf -v cont '\n%17s' ''  # continuation lines align with the detail column
+  for entry in "${checks[@]}"; do
+    status="${entry%% *}"
+    rest="${entry#* }"
+    name="${rest%% *}"
+    detail="${rest#* }"
+    case "${status}" in
+      ok) colour="${green}" ;;
+      warn) colour="${yellow}" ;;
+      skip) colour="${dim}" ;;
+      *) colour="${red}"; failed=1 ;;
+    esac
+    printf ' %s%-4s%s  %s%-8s%s  %s\n' "${colour}" "${status}" "${reset}" \
+      "${bold}" "${name}" "${reset}" "${detail//$'\n'/${cont}}"
+  done
+  return "${failed}"
+}
+
 # System-wide settings. Fedora/RHEL and macOS ship /etc/bashrc; Debian's
 # /etc/bash.bashrc is sourced by bash itself.
 [[ -r /etc/bashrc ]] && source /etc/bashrc
