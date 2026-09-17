@@ -1,9 +1,10 @@
-# shellcheck shell=bash
+# shellcheck shell=bash disable=SC1090,SC1091
 # ~/.bashrc: interactive bash configuration for linux and macos.
 #
 # Requires bash >= 4.3. macOS ships 3.2 in /bin/bash, so install a current one
 # with `brew install bash`. Terminals on macOS start login shells, which read
-# ~/.bash_profile, so that file must source this one.
+# ~/.bash_profile, so that file must source this one. Every file sourced below
+# is optional and machine-specific, hence the shellcheck directive above.
 
 # Do nothing for non-interactive shells.
 case $- in
