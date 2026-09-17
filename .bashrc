@@ -15,12 +15,17 @@ esac
 # are expanded when a function body is parsed.
 
 #######################################
-# Print a message to stderr.
+# Print a message to stderr, with the same " -> " prefix as the status lines
+# of check_tcp_port and check_tls_chain, the arrow in their colour on a tty.
+# Globals:
+#   NO_COLOR
 # Arguments:
 #   Message text
 #######################################
 err() {
-  echo "-> $*" >&2
+  local arrow='->'
+  [[ -t 2 && -z "${NO_COLOR:-}" ]] && arrow=$'\e[36m\e[1m->\e[0m'
+  echo " ${arrow} $*" >&2
 }
 
 #######################################
@@ -211,48 +216,105 @@ jwt_decode() {
 # Test whether a TCP port accepts connections, using bash's own /dev/tcp so
 # it works on hosts without nc, nmap or curl. The connect runs in a
 # background subshell because bash cannot give connect() a timeout itself;
-# the outer subshell keeps job-control chatter out of an interactive shell.
+# its error text is captured because it names the reason, and the group
+# around it keeps job-control chatter out of an interactive shell.
 # bash picks the descriptor number: on macOS a host name lookup leaves a
 # guarded network-policy descriptor on the lowest free fd, and redirecting
 # onto a fixed number such as 3 dup2()s over it, which the kernel answers
 # with EXC_GUARD and SIGKILL, so the port looked "closed".
+# Globals:
+#   LANG, LC_ALL, LC_CTYPE, NO_COLOR
 # Arguments:
 #   Host name or address
 #   Port number
 #   Timeout in whole seconds, default 3
 # Outputs:
-#   "<host>:<port> open", "closed" or "no answer in <n>s" on stdout
+#   " -> checking '<host> tcp/<port>'" plus a green tick or a red cross on
+#   stdout; after a cross, " -> err: <reason>" on stderr with the reason:
+#   closed, unknown host, no answer in <n>s, check died with status <n>, or
+#   what bash reported. ok and FAIL replace the glyphs when the locale is
+#   set and is not UTF-8, the same rule as the prompt.
 # Returns:
 #   0 if the port accepts a connection, 1 if not, 2 on usage error
 #######################################
-check_tcp_port() {
+probe_tcp_port() {
   local host="${1:-}" port="${2:-}" timeout="${3:-3}"
   local -r usage='usage: check_tcp_port <host> <port> [timeout-seconds]'
+  local output status reason ctype mark arrow='->' tick='✔' cross='✘'
+  local red='' green='' reset=''
 
-  if [[ -z "${host}" || ! "${port}" =~ ^[0-9]+$ || ! "${timeout}" =~ ^[0-9]+$ ]] \
-      || (( port < 1 || port > 65535 )); then
+  if [[ -z "${host}" || ! "${port}" =~ ^[1-9][0-9]{0,4}$ ]] \
+      || [[ ! "${timeout}" =~ ^[1-9][0-9]*$ ]] || (( port > 65535 )); then
     err "${usage}"
     return 2
   fi
+  if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+    red=$'\e[31m' green=$'\e[32m' reset=$'\e[0m' arrow=$'\e[36m\e[1m->\e[0m'
+  fi
+  ctype="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
+  if [[ -n "${ctype}" && "${ctype,,}" != *utf* ]]; then
+    tick=ok cross=FAIL
+  fi
 
-  (
-    ( exec {fd}<> "/dev/tcp/${host}/${port}" && exec {fd}>&- ) 2> /dev/null &
-    pid=$!
-    for (( i = 0; i < timeout * 10; i++ )); do
-      kill -0 "${pid}" 2> /dev/null || break
-      sleep 0.1
-    done
-    if kill -0 "${pid}" 2> /dev/null; then
-      kill "${pid}" 2> /dev/null
-      exit 124
-    fi
-    wait "${pid}"
+  output=$(
+    {
+      ( exec {fd}<> "/dev/tcp/${host}/${port}" && exec {fd}>&- ) 2>&1 &
+      pid=$!
+      for (( i = 0; i < timeout * 10; i++ )); do
+        kill -0 "${pid}" 2> /dev/null || break
+        sleep 0.1
+      done
+      if kill -0 "${pid}" 2> /dev/null; then
+        kill "${pid}" 2> /dev/null
+        exit 124
+      fi
+      wait "${pid}"
+    } 2> /dev/null
   )
-  case $? in
-    0) echo "${host}:${port} open" ;;
-    124) echo "${host}:${port} no answer in ${timeout}s"; return 1 ;;
-    *) echo "${host}:${port} closed"; return 1 ;;
-  esac
+  status=$?
+
+  if (( status == 0 )); then
+    mark="${green}${tick}${reset}"
+  else
+    mark="${red}${cross}${reset}"
+    case "${status}" in
+      124) reason="no answer in ${timeout}s" ;;
+      *)
+        # bash's first line names the cause, e.g. "bash: connect: Connection
+        # refused" or "bash: host: nodename nor servname provided, or not
+        # known" (glibc says "Name or service not known"; scripts add
+        # "line N:").
+        reason="${output%%$'\n'*}"
+        reason="${reason##*: }"
+        case "${reason}" in
+          *refused*) reason=closed ;;
+          *'not known'*|*nodename*|*'name resolution'*) reason='unknown host' ;;
+          '') reason="check died with status ${status}" ;;
+          *) reason="${reason,}" ;;
+        esac
+        ;;
+    esac
+  fi
+  printf " %s checking '%s tcp/%s' %s\n" "${arrow}" "${host}" "${port}" "${mark}"
+  (( status == 0 )) && return 0
+  err "err: ${reason}"
+  return 1
+}
+
+#######################################
+# probe_tcp_port with a blank line before and after, for use at the prompt.
+# Arguments:
+#   Passed through to probe_tcp_port
+# Returns:
+#   The status of probe_tcp_port
+#######################################
+check_tcp_port() {
+  local status
+  echo
+  probe_tcp_port "$@"
+  status=$?
+  echo
+  return "${status}"
 }
 
 #######################################
@@ -269,7 +331,7 @@ check_tcp_port() {
 # LibreSSL its keychain roots, so a bundle cannot make a public root untrusted.
 # The hostname check and the "your store had the intermediate" detection need
 # OpenSSL 1.1.1+ and are skipped on LibreSSL. The connect timeout comes from
-# check_tcp_port, since s_client has none; a port that accepts the connection
+# probe_tcp_port, since s_client has none; a port that accepts the connection
 # but never answers hangs until ctrl-c.
 # Globals:
 #   NO_COLOR, OSTYPE, SSL_CERT_DIR, SSL_CERT_FILE
@@ -277,21 +339,22 @@ check_tcp_port() {
 #   Host name or address
 #   Port number, default 443
 # Outputs:
-#   Every certificate sent, then one ok/warn/FAIL line per check, on stdout
+#   The probe_tcp_port line, then protocol, cipher and certificate count,
+#   every certificate sent, then one ok/warn/FAIL line per check, on stdout
 # Returns:
 #   0 if every check passes, 1 if one fails or no TLS session was made,
 #   2 on usage error
 #######################################
-check_tls_chain() {
+report_tls_chain() {
   local host="${1:-}" port="${2:-443}"
   local -r usage='usage: check_tls_chain <host> [port]'
   local -r nameopt='RFC2253,sep_comma_plus_space,-esc_msb'
-  local answer raw line info ssl_lib ssl_dir store now epoch days when plural
+  local raw line info ssl_lib ssl_dir store now epoch days when plural
   local i j k n top next aia detail broken entry status name rest colour cont
   local missing unit
   local proto='' new_proto='' cipher='' vcode='' vtext='' pem='' in_pem=false
   local checkname='-checkhost' connect="${host}:${port}" failed=0
-  local bold='' dim='' red='' green='' yellow='' cyan='' reset=''
+  local bold='' dim='' red='' green='' yellow='' cyan='' reset='' arrow
   local -a certs=() subject=() issuer=() notafter=() role=() checks=()
   local -a sni=() verify_opts=() supplied=()
 
@@ -315,6 +378,7 @@ check_tls_chain() {
     bold=$'\e[1m' dim=$'\e[2m' red=$'\e[31m' green=$'\e[32m'
     yellow=$'\e[33m' cyan=$'\e[36m' reset=$'\e[0m'
   fi
+  arrow="${cyan}${bold}->${reset}"
 
   # SNI must not be an IP literal (RFC 6066), and an IP is matched against the
   # certificate's IP entries rather than its DNS names.
@@ -325,10 +389,7 @@ check_tls_chain() {
     sni=(-servername "${host}")
   fi
 
-  if ! answer=$(check_tcp_port "${host}" "${port}"); then
-    err "${answer}"
-    return 1
-  fi
+  probe_tcp_port "${host}" "${port}" || return 1
   raw=$(openssl s_client -connect "${connect}" "${sni[@]}" -showcerts < /dev/null 2>&1)
   if [[ "${raw}" != *'-----BEGIN CERTIFICATE-----'* ]]; then
     err "no certificate from ${host}:${port}"
@@ -418,8 +479,8 @@ check_tls_chain() {
 
   plural=s
   (( n == 1 )) && plural=''
-  printf '%s%s:%s%s  %s  %s  %d certificate%s sent\n' "${bold}" "${host}" "${port}" \
-    "${reset}" "${proto:-?}" "${cipher:-?}" "${n}" "${plural}"
+  printf ' %s %s  %s  %d certificate%s sent\n' \
+    "${arrow}" "${proto:-?}" "${cipher:-?}" "${n}" "${plural}"
   echo
 
   now=$(date +%s)
@@ -604,6 +665,22 @@ check_tls_chain() {
       "${bold}" "${name}" "${reset}" "${detail//$'\n'/${cont}}"
   done
   return "${failed}"
+}
+
+#######################################
+# report_tls_chain with a blank line before and after, for use at the prompt.
+# Arguments:
+#   Passed through to report_tls_chain
+# Returns:
+#   The status of report_tls_chain
+#######################################
+check_tls_chain() {
+  local status
+  echo
+  report_tls_chain "$@"
+  status=$?
+  echo
+  return "${status}"
 }
 
 # System-wide settings. Fedora/RHEL and macOS ship /etc/bashrc; Debian's
