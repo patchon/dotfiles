@@ -212,6 +212,10 @@ jwt_decode() {
 # it works on hosts without nc, nmap or curl. The connect runs in a
 # background subshell because bash cannot give connect() a timeout itself;
 # the outer subshell keeps job-control chatter out of an interactive shell.
+# bash picks the descriptor number: on macOS a host name lookup leaves a
+# guarded network-policy descriptor on the lowest free fd, and redirecting
+# onto a fixed number such as 3 dup2()s over it, which the kernel answers
+# with EXC_GUARD and SIGKILL, so the port looked "closed".
 # Arguments:
 #   Host name or address
 #   Port number
@@ -232,7 +236,7 @@ check_tcp_port() {
   fi
 
   (
-    ( exec 3<> "/dev/tcp/${host}/${port}" ) 2> /dev/null &
+    ( exec {fd}<> "/dev/tcp/${host}/${port}" && exec {fd}>&- ) 2> /dev/null &
     pid=$!
     for (( i = 0; i < timeout * 10; i++ )); do
       kill -0 "${pid}" 2> /dev/null || break
