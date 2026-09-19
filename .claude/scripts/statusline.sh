@@ -8,14 +8,24 @@
 #         │ 5h … │ 7d … │ 7d <model> … │ extra …
 #
 # Design notes:
-#   - The rendered line is cached per session for OUTPUT_CACHE_TTL seconds,
-#     so the common path is one stat and one cat.
+#   - The rendered line is cached per session for OUTPUT_CACHE_TTL seconds
+#     and re-rendered as soon as the model, effort, context usage or
+#     directory in the stdin JSON change, so the common path is one stat
+#     and two reads.
 #   - All stdin fields are extracted with a single jq call.
 #   - Timers use minute resolution, so the output is stable between
 #     refreshes and the terminal is not redrawn needlessly.
 #   - Per-model weekly limits (e.g. Fable) and extra usage only exist in the
 #     /api/oauth/usage response, which is cached for USAGE_CACHE_TTL seconds
 #     and shared between sessions.
+#   - Ultracode reaches the status line as effort "xhigh": inside Claude
+#     Code it is a separate in-memory flag, not an effort level. It is shown
+#     as "ultra" when the last ultra_effort_enter/exit marker in the session
+#     transcript says it is on. Claude Code appends such a marker at the
+#     next typed prompt after the flag changes, and the transcript is only
+#     read when the line is re-rendered, so the label follows a toggle at
+#     the next assistant message. Until the first marker exists, the
+#     --effort ultracode launch flag and the ultracode settings key count.
 #   - Runs on bash 3.2 (macOS /bin/bash) and with both BSD and GNU date/stat.
 #
 # Setup on a new machine (needs bash 3.2+, jq and curl):
@@ -389,7 +399,7 @@ rainbow_text() {
 #######################################
 # Render the effort segment.
 # Arguments:
-#   Effort level.
+#   Effort level, or "ultracode".
 #   Current epoch seconds (drives the "max" colour cycle).
 #######################################
 effort_segment() {
@@ -398,6 +408,7 @@ effort_segment() {
 
   case "${effort}" in
     max) rainbow_text '● max' "${now}" ;;
+    ultracode) printf '%s' "${ORANGE}◉ ultra${RESET}" ;;
     xhigh) printf '%s' "${ORANGE}◉ xhi${RESET}" ;;
     high) printf '%s' "${YELLOW}◕ hi${RESET}" ;;
     medium) printf '%s' "${CYAN}◐ med${RESET}" ;;
@@ -430,17 +441,93 @@ git_segment() {
 }
 
 #######################################
-# Print a marker when the parent Claude Code process was started with
-# --dangerously-skip-permissions.
+# Print the command line of the parent Claude Code process.
 # Globals:
 #   PPID
 #######################################
-skip_permissions_marker() {
-  local parent_cmd
-
-  parent_cmd=$(ps -o args= -p "${PPID}" 2>/dev/null)
-  [[ "${parent_cmd}" == *--dangerously-skip-permissions* ]] && printf '⚡  '
+parent_command() {
+  ps -o args= -p "${PPID}" 2>/dev/null
   return 0
+}
+
+#######################################
+# Print a marker when Claude Code was started with
+# --dangerously-skip-permissions.
+# Arguments:
+#   Command line of the parent Claude Code process.
+#######################################
+skip_permissions_marker() {
+  [[ "$1" == *--dangerously-skip-permissions* ]] && printf '⚡  '
+  return 0
+}
+
+#######################################
+# Print the state recorded by the last ultracode marker in a session
+# transcript. At the start of each typed prompt Claude Code compares its
+# ultracode flag with the last marker and, when they differ, appends an
+# attachment record of type ultra_effort_enter or ultra_effort_exit. The
+# records are matched as fixed strings together with their surrounding
+# JSON punctuation, so copies quoted inside messages (where the quotes
+# are escaped) do not count.
+# Arguments:
+#   Path to the transcript (may be empty or missing).
+# Outputs:
+#   "enter", "exit", or nothing when the transcript has no marker.
+#######################################
+transcript_ultracode_marker() {
+  local transcript=$1
+  local marker
+
+  [[ -n "${transcript}" && -f "${transcript}" ]] || return 0
+  marker=$(grep -a -o -F \
+    -e '"attachment":{"type":"ultra_effort_enter"' \
+    -e '"attachment":{"type":"ultra_effort_exit"' \
+    "${transcript}" 2>/dev/null | tail -n 1)
+  case "${marker}" in
+    *enter*) printf 'enter' ;;
+    *exit*) printf 'exit' ;;
+  esac
+  return 0
+}
+
+#######################################
+# Test whether ultracode is on. Claude Code reports ultracode to the
+# status line as plain "xhigh" effort, so the answer comes from the
+# routes that leave a trace. The transcript marker is authoritative when
+# present, because it reflects the live flag as of the last typed prompt
+# and also records a toggle back off. Before the first marker exists the
+# launch flag and the ultracode key in a settings file (local, then
+# project, then user; the first file that sets the key wins) count.
+# Globals:
+#   SETTINGS_FILE
+# Arguments:
+#   Command line of the parent Claude Code process.
+#   Project directory.
+#   Path to the session transcript.
+# Returns:
+#   0 if ultracode is on, 1 otherwise.
+#######################################
+ultracode_on() {
+  local parent_cmd=$1
+  local project_dir=$2
+  local transcript=$3
+  local file files=() value
+
+  case "$(transcript_ultracode_marker "${transcript}")" in
+    enter) return 0 ;;
+    exit) return 1 ;;
+  esac
+  case "${parent_cmd}" in
+    *'--effort ultracode'*|*'--effort=ultracode'*) return 0 ;;
+  esac
+  for file in "${project_dir}/.claude/settings.local.json" \
+      "${project_dir}/.claude/settings.json" "${SETTINGS_FILE}"; do
+    [[ -f "${file}" ]] && files+=("${file}")
+  done
+  (( ${#files[@]} > 0 )) || return 1
+  value=$(jq -s 'map(select(type == "object" and has("ultracode"))
+      | .ultracode) | .[0] // false' "${files[@]}" 2>/dev/null)
+  [[ "${value}" == 'true' ]]
 }
 
 #######################################
@@ -541,8 +628,8 @@ render_line() {
   local input=$1
   local now=$2
   local model_name context_size input_tokens cache_create cache_read cwd \
-    session_start effort five_hour_used five_hour_resets seven_day_used \
-    seven_day_resets
+    project_dir transcript_path session_start effort five_hour_used \
+    five_hour_resets seven_day_used seven_day_resets parent_cmd
   local current_tokens context_pct=0 pct_color line git_seg duration
   local has_stdin_rates=false five_hour_pct='' five_hour_reset_epoch='' \
     seven_day_pct='' seven_day_reset_epoch='' seven_day_reset_text='' \
@@ -553,8 +640,9 @@ render_line() {
 
   # Extract every stdin field with one jq call.
   IFS="${FIELD_SEP}" read -r model_name context_size input_tokens \
-    cache_create cache_read cwd session_start effort five_hour_used \
-    five_hour_resets seven_day_used seven_day_resets < <(
+    cache_create cache_read cwd project_dir transcript_path session_start \
+    effort five_hour_used five_hour_resets seven_day_used \
+    seven_day_resets < <(
     jq -r --arg sep "${FIELD_SEP}" '[
       (.model.display_name // "Claude"),
       (.context_window.context_window_size // 0),
@@ -562,6 +650,8 @@ render_line() {
       (.context_window.current_usage.cache_creation_input_tokens // 0),
       (.context_window.current_usage.cache_read_input_tokens // 0),
       (.cwd // ""),
+      (.workspace.project_dir // ""),
+      (.transcript_path // ""),
       (.session.start_time // ""),
       (.effort.level // ""),
       (.rate_limits.five_hour.used_percentage // ""),
@@ -582,8 +672,15 @@ render_line() {
   if (( context_size > 0 )); then
     context_pct=$(( current_tokens * 100 / context_size ))
   fi
-  effort=$(resolve_effort "${effort}")
   has_value "${cwd}" || cwd="${PWD}"
+  has_value "${project_dir}" || project_dir="${cwd}"
+  parent_cmd=$(parent_command)
+  effort=$(resolve_effort "${effort}")
+  if [[ "${effort}" == 'xhigh' ]] \
+      && ultracode_on "${parent_cmd}" "${project_dir}" \
+        "${transcript_path}"; then
+    effort='ultracode'
+  fi
 
   # Model │ context % │ [⚡ ]branch │ ⏱ session │ effort
   pct_color=$(color_for_pct "${context_pct}")
@@ -591,7 +688,7 @@ render_line() {
   line+="${SEP}✍️ ${pct_color}${context_pct}%${RESET}"
   git_seg=$(git_segment "${cwd}")
   if [[ -n "${git_seg}" ]]; then
-    line+="${SEP}$(skip_permissions_marker)${git_seg}"
+    line+="${SEP}$(skip_permissions_marker "${parent_cmd}")${git_seg}"
   fi
   duration=$(session_duration "${session_start}" "${now}")
   if [[ -n "${duration}" ]]; then
@@ -689,13 +786,38 @@ render_line() {
 }
 
 #######################################
-# Entry point: read stdin, serve the cached line while fresh, otherwise
-# render, cache and print a new one.
+# Print a fingerprint of the stdin fields that change the rendered line:
+# model, effort, context usage and working directory. Volatile fields such
+# as cost.total_duration_ms are left out, so the once-a-second refreshes
+# keep hitting the cache. Plain string operations keep this fork-free.
+# Arguments:
+#   Stdin JSON from Claude Code.
+#######################################
+input_fingerprint() {
+  local input=$1
+  local key rest out=''
+
+  # Flat objects: everything up to their closing brace.
+  for key in model effort current_usage; do
+    rest="${input#*\""${key}"\":\{}"
+    [[ "${rest}" == "${input}" ]] && continue
+    out+="${rest%%\}*};"
+  done
+  rest="${input#*\"cwd\":\"}"
+  [[ "${rest}" != "${input}" ]] && out+="${rest%%\"*}"
+  printf '%s' "${out}"
+}
+
+#######################################
+# Entry point: read stdin, serve the cached line while it is fresh and
+# was rendered from the same inputs, otherwise render, cache and print a
+# new one. The cache file holds the input fingerprint on the first line
+# and the rendered line on the second.
 # Globals:
 #   CACHE_DIR, OUTPUT_CACHE_TTL
 #######################################
 main() {
-  local input session_id output_cache now cache_mtime line
+  local input session_id output_cache key now cache_mtime cached_key line
 
   input=$(cat)
   if [[ -z "${input}" ]]; then
@@ -712,22 +834,27 @@ main() {
     session_id="${session_id%%\"*}"
   fi
   output_cache="${CACHE_DIR}/statusline-out-${session_id}.cache"
+  key=$(input_fingerprint "${input}")
 
   # EPOCHSECONDS needs bash >= 5; older shells pay one fork for date.
   now="${EPOCHSECONDS:-$(date +%s)}"
 
-  # Fast path: the cached line is still fresh, so print it and leave.
+  # Fast path: the cached line is still fresh and the model, effort,
+  # context usage and directory have not changed, so print it and leave.
   if [[ -f "${output_cache}" ]]; then
     cache_mtime=$(file_mtime "${output_cache}")
     if [[ -n "${cache_mtime}" ]] \
         && (( now - cache_mtime < OUTPUT_CACHE_TTL )); then
-      cat "${output_cache}"
-      return 0
+      { IFS= read -r cached_key; IFS= read -r line; } < "${output_cache}"
+      if [[ "${cached_key}" == "${key}" && -n "${line}" ]]; then
+        printf '%s' "${line}"
+        return 0
+      fi
     fi
   fi
 
   line=$(render_line "${input}" "${now}")
-  printf '%s' "${line}" > "${output_cache}"
+  printf '%s\n%s\n' "${key}" "${line}" > "${output_cache}"
   printf '%s' "${line}"
 }
 
