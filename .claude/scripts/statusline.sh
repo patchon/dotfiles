@@ -4,14 +4,21 @@
 #
 # Reads the JSON that Claude Code writes to stdin and prints one line:
 #
-#   model │ ✍️ context% │ [⚡ ]branch[*] │ ⏱ session │ effort
+#   model[ »] │ ✍️ context%[↑] │ [⚡ ]branch[*] │ ⏱ session │ effort │ ♨ cache
 #         │ 5h … │ 7d … │ 7d <model> … │ extra …
 #
 # Design notes:
 #   - The rendered line is cached per session for OUTPUT_CACHE_TTL seconds
-#     and re-rendered as soon as the model, effort, context usage or
-#     directory in the stdin JSON change, so the common path is one stat
-#     and two reads.
+#     and re-rendered as soon as the model, effort, context usage,
+#     directory, cache warmth, 200k flag or fast mode in the stdin JSON
+#     change, so the common path is one stat and two reads.
+#   - » after the model name means fast mode is on: Opus at up to 2.5x the
+#     speed, billed per token from usage credits rather than the plan.
+#   - ↑ after the context percentage means the last request exceeded 200k
+#     tokens, the fixed threshold above which input costs the long-context
+#     rate and drains the rate limits faster, whatever the window size.
+#   - The cache segment shows ♨ and the time the prompt cache goes cold, or
+#     ❄ once it has; the next prompt after that re-sends the whole context.
 #   - All stdin fields are extracted with a single jq call.
 #   - Timers use minute resolution, so the output is stable between
 #     refreshes and the terminal is not redrawn needlessly.
@@ -533,19 +540,19 @@ ultracode_on() {
 #######################################
 # Print the session duration as "<1m", "12m" or "1h5m".
 # Arguments:
-#   Session start as an ISO-8601 timestamp (may be empty or "null").
-#   Current epoch seconds.
+#   Wall-clock session time in milliseconds, from cost.total_duration_ms
+#   (may be empty or "null").
 # Outputs:
-#   The duration, or nothing if the start time is missing or unparseable.
+#   The duration, or nothing if the value is missing or not a number.
 #######################################
 session_duration() {
-  local start_iso=$1
-  local now=$2
-  local start_epoch elapsed
+  local duration_ms=$1
+  local elapsed
 
-  has_value "${start_iso}" || return 0
-  start_epoch=$(iso_to_epoch "${start_iso}") || return 0
-  elapsed=$(( now - start_epoch ))
+  case "${duration_ms}" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  elapsed=$(( duration_ms / 1000 ))
   if (( elapsed >= 3600 )); then
     printf '%dh%dm' "$(( elapsed / 3600 ))" "$(( elapsed % 3600 / 60 ))"
   elif (( elapsed >= 60 )); then
@@ -553,6 +560,32 @@ session_duration() {
   else
     printf '<1m'
   fi
+}
+
+#######################################
+# Render the prompt cache segment: "♨ HH:MM" while the cache is warm (the
+# time it goes cold), "❄" once it is cold.
+# Arguments:
+#   Warm flag: "true", "false", or anything else when unknown.
+#   Expiry as epoch seconds (may be empty or "null").
+# Outputs:
+#   The segment, or nothing when the payload has no cache statistics.
+#######################################
+cache_segment() {
+  local warm=$1
+  local expires_at=$2
+  local expires_text
+
+  case "${warm}" in
+    true)
+      printf '%s' "${GREEN}♨${RESET}"
+      expires_text=$(format_epoch_time "${expires_at}" time)
+      [[ -n "${expires_text}" ]] \
+        && printf ' %s' "${WHITE}${expires_text}${RESET}"
+      ;;
+    false) printf '%s' "${CYAN}❄${RESET}" ;;
+  esac
+  return 0
 }
 
 #######################################
@@ -628,9 +661,11 @@ render_line() {
   local input=$1
   local now=$2
   local model_name context_size input_tokens cache_create cache_read cwd \
-    project_dir transcript_path session_start effort five_hour_used \
-    five_hour_resets seven_day_used seven_day_resets parent_cmd
-  local current_tokens context_pct=0 pct_color line git_seg duration
+    project_dir transcript_path duration_ms effort five_hour_used \
+    five_hour_resets seven_day_used seven_day_resets cache_warm \
+    cache_expires exceeds_200k fast_mode parent_cmd
+  local current_tokens context_pct=0 pct_color line git_seg duration \
+    cache_seg
   local has_stdin_rates=false five_hour_pct='' five_hour_reset_epoch='' \
     seven_day_pct='' seven_day_reset_epoch='' seven_day_reset_text='' \
     reset_text reset_epoch
@@ -640,9 +675,9 @@ render_line() {
 
   # Extract every stdin field with one jq call.
   IFS="${FIELD_SEP}" read -r model_name context_size input_tokens \
-    cache_create cache_read cwd project_dir transcript_path session_start \
+    cache_create cache_read cwd project_dir transcript_path duration_ms \
     effort five_hour_used five_hour_resets seven_day_used \
-    seven_day_resets < <(
+    seven_day_resets cache_warm cache_expires exceeds_200k fast_mode < <(
     jq -r --arg sep "${FIELD_SEP}" '[
       (.model.display_name // "Claude"),
       (.context_window.context_window_size // 0),
@@ -652,12 +687,17 @@ render_line() {
       (.cwd // ""),
       (.workspace.project_dir // ""),
       (.transcript_path // ""),
-      (.session.start_time // ""),
+      (.cost.total_duration_ms // ""
+        | if type == "number" then floor else . end),
       (.effort.level // ""),
       (.rate_limits.five_hour.used_percentage // ""),
       (.rate_limits.five_hour.resets_at // ""),
       (.rate_limits.seven_day.used_percentage // ""),
-      (.rate_limits.seven_day.resets_at // "")
+      (.rate_limits.seven_day.resets_at // ""),
+      (.prompt_cache.warm | tostring),
+      (.prompt_cache.expires_at // ""),
+      (.exceeds_200k_tokens | tostring),
+      (.fast_mode | tostring)
     ] | map(tostring) | join($sep)' <<< "${input}" 2>/dev/null
   )
 
@@ -682,19 +722,25 @@ render_line() {
     effort='ultracode'
   fi
 
-  # Model │ context % │ [⚡ ]branch │ ⏱ session │ effort
+  # Model[ »] │ context %[↑] │ [⚡ ]branch │ ⏱ session │ effort │ cache
   pct_color=$(color_for_pct "${context_pct}")
   line="${BLUE}${model_name}${RESET}"
+  [[ "${fast_mode}" == 'true' ]] && line+=" ${ORANGE}»${RESET}"
   line+="${SEP}✍️ ${pct_color}${context_pct}%${RESET}"
+  [[ "${exceeds_200k}" == 'true' ]] && line+="${RED}↑${RESET}"
   git_seg=$(git_segment "${cwd}")
   if [[ -n "${git_seg}" ]]; then
     line+="${SEP}$(skip_permissions_marker "${parent_cmd}")${git_seg}"
   fi
-  duration=$(session_duration "${session_start}" "${now}")
+  duration=$(session_duration "${duration_ms}")
   if [[ -n "${duration}" ]]; then
     line+="${SEP}${DIM}⏱ ${RESET}${WHITE}${duration}${RESET}"
   fi
   line+="${SEP}$(effort_segment "${effort}" "${now}")"
+  cache_seg=$(cache_segment "${cache_warm}" "${cache_expires}")
+  if [[ -n "${cache_seg}" ]]; then
+    line+="${SEP}${cache_seg}"
+  fi
 
   # Rate limits: stdin is primary because it is fresher. The usage API is
   # still fetched, because per-model weekly limits and extra usage only
@@ -787,9 +833,11 @@ render_line() {
 
 #######################################
 # Print a fingerprint of the stdin fields that change the rendered line:
-# model, effort, context usage and working directory. Volatile fields such
-# as cost.total_duration_ms are left out, so the once-a-second refreshes
-# keep hitting the cache. Plain string operations keep this fork-free.
+# model, effort, context usage, working directory, cache warmth, the 200k
+# flag and fast mode. Volatile fields such as cost.total_duration_ms are
+# left out, so the once-a-second refreshes keep hitting the cache (the
+# duration is shown at minute resolution, which the cache TTL matches).
+# Plain string operations keep this fork-free.
 # Arguments:
 #   Stdin JSON from Claude Code.
 #######################################
@@ -802,6 +850,12 @@ input_fingerprint() {
     rest="${input#*\""${key}"\":\{}"
     [[ "${rest}" == "${input}" ]] && continue
     out+="${rest%%\}*};"
+  done
+  # Flat scalars: everything up to the next comma or closing brace.
+  for key in warm exceeds_200k_tokens fast_mode; do
+    rest="${input#*\""${key}"\":}"
+    [[ "${rest}" == "${input}" ]] && continue
+    out+="${rest%%[,\}]*};"
   done
   rest="${input#*\"cwd\":\"}"
   [[ "${rest}" != "${input}" ]] && out+="${rest%%\"*}"
