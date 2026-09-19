@@ -98,30 +98,84 @@ setup_ssh_agent() {
 }
 
 #######################################
-# Add a private key to the agent unless it already holds keys.
+# Check whether a file is a private key that needs a passphrase. Only those
+# gain anything from the agent: ssh reads a passphrase-less key straight
+# from its IdentityFile.
+# Arguments:
+#   Path to check
+# Returns:
+#   0 if the file is a passphrase-protected private key, 1 otherwise
+#######################################
+is_encrypted_key() {
+  local first
+  [[ -f "$1" ]] || return 1
+  read -r first < "$1"
+  [[ "${first}" == '-----BEGIN '*'PRIVATE KEY-----' ]] || return 1
+  ! ssh-keygen -y -P '' -f "$1" &> /dev/null
+}
+
+#######################################
+# Check whether the agent holds a private key, by fingerprint. ssh-keygen
+# takes the fingerprint from the .pub next to the key when there is one, and
+# from the key itself otherwise. No signing, so a hardware key is not asked
+# for a touch.
+# Arguments:
+#   Path to private key
+# Returns:
+#   0 if the agent lists the key, 1 otherwise
+#######################################
+ssh_key_loaded() {
+  local fp
+  read -r _ fp _ < <(ssh-keygen -lf "$1" 2> /dev/null)
+  [[ -n "${fp}" ]] && ssh-add -l 2> /dev/null | grep -qF " ${fp} "
+}
+
+#######################################
+# Add a private key to the agent.
 #
-# On macOS the passphrase is kept in the keychain: the first shell asks for
-# it once and stores it, every shell after that loads the key silently.
-# Apple's /usr/bin/ssh-add is used explicitly for that, since a Homebrew
-# openssh earlier in PATH does not know the --apple-* options. Elsewhere
-# ssh-add prompts until a key is loaded.
+# On macOS the passphrase is kept in the keychain: the first time a key is
+# added the user is asked once and the passphrase stored, after that
+# ssh-add reads it from the keychain silently. Apple's /usr/bin/ssh-add is
+# used explicitly for that, since a Homebrew openssh earlier in PATH does
+# not know the --apple-* options. Elsewhere ssh-add prompts.
+#
+# Warns when the key went in but its .pub sibling belongs to another key:
+# ssh trips over that too, and every shell would re-add the key.
 # Globals:
 #   OSTYPE
 # Arguments:
 #   Path to private key
+# Returns:
+#   ssh-add's exit status
 #######################################
 add_ssh_key() {
   local key="$1"
-  [[ -f "${key}" ]] || return 0
-  ssh-add -l &> /dev/null && return 0
 
   if [[ "${OSTYPE}" == darwin* && -x /usr/bin/ssh-add ]]; then
-    /usr/bin/ssh-add --apple-load-keychain 2> /dev/null
-    ssh-add -l &> /dev/null && return 0
-    /usr/bin/ssh-add --apple-use-keychain "${key}"
+    /usr/bin/ssh-add --apple-use-keychain "${key}" || return
   else
-    ssh-add "${key}"
+    ssh-add "${key}" || return
   fi
+  ssh_key_loaded "${key}" || err "${key}.pub does not belong to ${key}"
+}
+
+#######################################
+# Load every passphrase-protected key in ~/.ssh that the agent does not hold
+# yet. Runs at every shell start; the checks cost a few ms per key file.
+# Globals:
+#   HOME
+# Returns:
+#   0, or 1 when no agent answers
+#######################################
+add_ssh_keys() {
+  local key
+  ssh_agent_alive || { err 'no ssh-agent'; return 1; }
+  for key in "${HOME}"/.ssh/*; do
+    is_encrypted_key "${key}" || continue
+    ssh_key_loaded "${key}" && continue
+    add_ssh_key "${key}"
+  done
+  return 0
 }
 
 #######################################
@@ -772,7 +826,7 @@ if [[ "${PROMPT_COMMAND}" != *'history -a'* ]]; then
 fi
 
 setup_ssh_agent
-add_ssh_key "${HOME}/.ssh/id_ed25519"
+add_ssh_keys
 setup_gpg
 
 # Aliases. GNU ls takes --color, BSD ls (macOS) takes -G.

@@ -35,8 +35,9 @@ Then, per machine:
 - **A Nerd Font** for the prompt glyphs, e.g. MesloLGS Nerd Font.
 - **gpg on macOS.** `brew install gnupg pinentry-mac`. `.bashrc` points
   gpg-agent at pinentry-mac and records the gpg path in `~/.gitconfig.local`.
-- **ssh.** `.bashrc` loads `~/.ssh/id_ed25519` into the agent. On macOS the
-  passphrase is stored in the keychain after the first prompt.
+- **ssh.** `.bashrc` loads every passphrase-protected key in `~/.ssh` into the
+  agent. On macOS the passphrases are stored in the keychain after the first
+  prompt.
 - **Claude Code.** `brew install jq`, then
   `.claude/scripts/sync-claude-settings.sh apply` merges the shared settings
   into `~/.claude/settings.json`. Add `--no-plugins` to leave the plugin
