@@ -15,8 +15,10 @@
 #   - » after the model name means fast mode is on: Opus at up to 2.5x the
 #     speed, billed per token from usage credits rather than the plan.
 #   - ↑ after the context percentage means the last request exceeded 200k
-#     tokens, the fixed threshold above which input costs the long-context
-#     rate and drains the rate limits faster, whatever the window size.
+#     tokens, a fixed threshold whatever the window size. The 1M window has
+#     no per-token premium beyond it, but every turn now processes 200k+
+#     tokens, which is slow and is what /usage flags as long context: a
+#     hint to /compact or /clear at the next natural break.
 #   - The cache segment shows ♨ and the time the prompt cache goes cold, or
 #     ❄ once it has; the next prompt after that re-sends the whole context.
 #   - All stdin fields are extracted with a single jq call.
