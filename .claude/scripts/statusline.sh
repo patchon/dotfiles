@@ -4,8 +4,8 @@
 #
 # Reads the JSON that Claude Code writes to stdin and prints one line:
 #
-#   model[ »] │ ✍️ context%[↑] │ [⚡ ]branch[*] │ ⏱ session │ effort │ ♨ cache
-#         │ 5h … │ 7d … │ 7d <model> … │ extra …
+#   model[ »] │ effort │ ✎ context%[ ↑] │ [⚡ ]branch[*]
+#         │ 5h … · 7d … · <model> … ⟳ reset │ extra … │ ⏱ session │ ♨ cache
 #
 # Design notes:
 #   - The rendered line is cached per session for OUTPUT_CACHE_TTL seconds
@@ -21,6 +21,23 @@
 #     hint to /compact or /clear at the next natural break.
 #   - The cache segment shows ♨ and the time the prompt cache goes cold, or
 #     ❄ once it has; the next prompt after that re-sends the whole context.
+#   - Effort sits next to the model: both answer "what is running and how
+#     hard", so they read together rather than straddling the line.
+#   - The session clocks, elapsed time and cache expiry, are built into a
+#     tail and appended last, so they sit at the far right away from the
+#     segments that move with what is being worked on.
+#   - The rate limits print as one segment joined by dim middots: the 5h
+#     window with its own reset, then the weekly total, then every
+#     per-model weekly limit that shares the total's reset, with that
+#     reset shown once at the end. The weekly resets are the same instant
+#     in practice, so repeating them wasted a third of the segment. A
+#     per-model limit that resets at some other time is left out of the
+#     group and gets its own │-separated segment carrying its own reset,
+#     so a divergence shows up rather than being hidden by the grouping.
+#   - Everything on the line is rendered in lower case, whatever the
+#     source spells: "Fable 5.1" from stdin, "Fable" from the usage API
+#     and a branch such as "Feature-X" all print lower case. to_lower is
+#     the single place that enforces it.
 #   - All stdin fields are extracted with a single jq call.
 #   - Timers use minute resolution, so the output is stable between
 #     refreshes and the terminal is not redrawn needlessly.
@@ -70,6 +87,12 @@ readonly SETTINGS_FILE="${HOME}/.claude/settings.json"
 readonly DEFAULT_CONTEXT_SIZE=200000
 readonly BAR_WIDTH=5
 readonly ISO_FORMAT='%Y-%m-%dT%H:%M:%S'
+# Marks the context-window percentage: U+270E, the pencil in its text
+# presentation rather than the U+270D+VS16 emoji this used to be. Text
+# presentation means it is one cell wide and takes a colour, so it can be
+# dimmed to match the clock beside it. Override with CLAUDE_CONTEXT_ICON to
+# try another one without editing this file.
+readonly CONTEXT_ICON="${CLAUDE_CONTEXT_ICON:-✎}"
 
 # Field separator between values extracted by jq. The ASCII unit separator
 # is used rather than tab: tab is IFS whitespace, so `read` would collapse
@@ -88,6 +111,9 @@ readonly DARK_ORANGE=$'\033[38;2;200;100;30m'
 readonly DIM=$'\033[2m'
 readonly RESET=$'\033[0m'
 readonly SEP=" ${DIM}│${RESET} "
+# Joins members of one group, e.g. the weekly total and its per-model
+# limits. Dimmer and tighter than SEP, so a group reads as one segment.
+readonly GROUP_SEP=" ${DIM}·${RESET} "
 
 # Colours cycled through the "max" effort label, red to violet.
 RAINBOW_COLORS=(
@@ -110,6 +136,19 @@ readonly RAINBOW_COLORS
 #######################################
 has_value() {
   [[ -n "$1" && "$1" != 'null' ]]
+}
+
+#######################################
+# Print text in lower case. The status line is lower case throughout, so
+# every label that comes from somewhere else goes through here first.
+# Bash 3.2 has no ${var,,}, hence tr.
+# Arguments:
+#   The text.
+# Outputs:
+#   The text, lower-cased.
+#######################################
+to_lower() {
+  tr '[:upper:]' '[:lower:]' <<< "$1"
 }
 
 #######################################
@@ -224,8 +263,9 @@ format_epoch_time() {
   # BSD date first, GNU date as fallback.
   result=$(date -j -r "${epoch}" "+${format}" 2>/dev/null)
   [[ -z "${result}" ]] && result=$(date -d "@${epoch}" "+${format}" 2>/dev/null)
+  # Only the datetime style has a month name to lower-case.
   if [[ "${style}" == 'datetime' ]]; then
-    result=$(tr '[:upper:]' '[:lower:]' <<< "${result}")
+    result=$(to_lower "${result}")
   fi
   printf '%s' "${result}"
 }
@@ -445,6 +485,7 @@ git_segment() {
   git -C "${cwd}" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
   branch=$(git -C "${cwd}" symbolic-ref --short HEAD 2>/dev/null)
   [[ -z "${branch}" ]] && return 0
+  branch=$(to_lower "${branch}")
   if [[ -n "$(git -C "${cwd}" --no-optional-locks status --porcelain \
       2>/dev/null)" ]]; then
     dirty='*'
@@ -594,9 +635,26 @@ cache_segment() {
 }
 
 #######################################
+# Render the "⟳ <time>" reset marker, with its leading space. Kept apart
+# from limit_segment so a group of limits sharing one reset can print it
+# once, after its last member.
+# Arguments:
+#   Formatted reset time, or empty.
+# Outputs:
+#   The marker, or nothing when the time is empty.
+#######################################
+reset_marker() {
+  local reset_text=$1
+
+  [[ -n "${reset_text}" ]] || return 0
+  printf ' %s⟳%s %s%s%s' "${DIM}" "${RESET}" "${WHITE}" "${reset_text}" \
+    "${RESET}"
+}
+
+#######################################
 # Render a rate-limit segment: "<label> <bar> <pct>%[ ⟳ <reset>]".
 # Arguments:
-#   Label, e.g. "5h" or "7d Fable".
+#   Label, e.g. "5h", "7d" or "fable".
 #   Used percentage (integer).
 #   Formatted reset time, or empty to omit it.
 #######################################
@@ -609,9 +667,7 @@ limit_segment() {
   bar=$(build_bar "${pct}" "${BAR_WIDTH}")
   color=$(color_for_pct "${pct}")
   out="${WHITE}${label}${RESET} ${bar} ${color}${pct}%${RESET}"
-  if [[ -n "${reset_text}" ]]; then
-    out+=" ${DIM}⟳${RESET} ${WHITE}${reset_text}${RESET}"
-  fi
+  out+=$(reset_marker "${reset_text}")
   printf '%s' "${out}"
 }
 
@@ -641,16 +697,15 @@ extra_usage_segment() {
   color=$(color_for_pct "${pct}")
 
   # Extra usage resets on the first of next month; BSD date first.
-  reset_text=$(date -v+1m -v1d +'%b %-d' 2>/dev/null \
-    | tr '[:upper:]' '[:lower:]')
+  reset_text=$(date -v+1m -v1d +'%b %-d' 2>/dev/null)
   if [[ -z "${reset_text}" ]]; then
-    reset_text=$(date -d "$(date +%Y-%m-01) +1 month" +'%b %-d' 2>/dev/null \
-      | tr '[:upper:]' '[:lower:]')
+    reset_text=$(date -d "$(date +%Y-%m-01) +1 month" +'%b %-d' 2>/dev/null)
   fi
+  reset_text=$(to_lower "${reset_text}")
 
   out="${WHITE}extra${RESET} ${bar}"
   out+=" ${color}\$${used}${DIM}/${RESET}${WHITE}\$${limit}${RESET}"
-  out+=" ${DIM}⟳${RESET} ${WHITE}${reset_text}${RESET}"
+  out+=$(reset_marker "${reset_text}")
   printf '%s' "${out}"
 }
 
@@ -670,10 +725,11 @@ render_line() {
     five_hour_resets seven_day_used seven_day_resets cache_warm \
     cache_expires exceeds_200k fast_mode parent_cmd
   local current_tokens context_pct=0 pct_color line git_seg duration \
-    cache_seg
+    cache_seg tail_seg=''
   local has_stdin_rates=false five_hour_pct='' five_hour_reset_epoch='' \
     seven_day_pct='' seven_day_reset_epoch='' seven_day_reset_text='' \
-    reset_text reset_epoch
+    reset_text reset_epoch limits_group='' weekly_group='' \
+    weekly_extra=''
   local usage_data extra_enabled=false scoped_limits='' api_five_hour_used \
     api_five_hour_resets api_seven_day_used api_seven_day_resets
   local name pct_raw pct reset_iso
@@ -706,7 +762,7 @@ render_line() {
     ] | map(tostring) | join($sep)' <<< "${input}" 2>/dev/null
   )
 
-  model_name="${model_name:-Claude}"
+  model_name=$(to_lower "${model_name:-Claude}")
   input_tokens="${input_tokens:-0}"
   cache_create="${cache_create:-0}"
   cache_read="${cache_read:-0}"
@@ -727,24 +783,27 @@ render_line() {
     effort='ultracode'
   fi
 
-  # Model[ »] │ context %[↑] │ [⚡ ]branch │ ⏱ session │ effort │ cache
+  # model[ »] │ effort │ context %[↑] │ [⚡ ]branch │ … │ ⏱ session │ cache
   pct_color=$(color_for_pct "${context_pct}")
   line="${BLUE}${model_name}${RESET}"
   [[ "${fast_mode}" == 'true' ]] && line+=" ${ORANGE}»${RESET}"
-  line+="${SEP}✍️ ${pct_color}${context_pct}%${RESET}"
-  [[ "${exceeds_200k}" == 'true' ]] && line+="${RED}↑${RESET}"
+  line+="${SEP}$(effort_segment "${effort}" "${now}")"
+  line+="${SEP}${DIM}${CONTEXT_ICON}${RESET} ${pct_color}${context_pct}%${RESET}"
+  [[ "${exceeds_200k}" == 'true' ]] && line+=" ${RED}↑${RESET}"
   git_seg=$(git_segment "${cwd}")
   if [[ -n "${git_seg}" ]]; then
     line+="${SEP}$(skip_permissions_marker "${parent_cmd}")${git_seg}"
   fi
+
+  # The two session clocks are held back and appended after everything
+  # else, so they close the line.
   duration=$(session_duration "${duration_ms}")
   if [[ -n "${duration}" ]]; then
-    line+="${SEP}${DIM}⏱ ${RESET}${WHITE}${duration}${RESET}"
+    tail_seg+="${SEP}${DIM}⏱ ${RESET}${WHITE}${duration}${RESET}"
   fi
-  line+="${SEP}$(effort_segment "${effort}" "${now}")"
   cache_seg=$(cache_segment "${cache_warm}" "${cache_expires}")
   if [[ -n "${cache_seg}" ]]; then
-    line+="${SEP}${cache_seg}"
+    tail_seg+="${SEP}${cache_seg}"
   fi
 
   # Rate limits: stdin is primary because it is fresher. The usage API is
@@ -807,35 +866,61 @@ render_line() {
     ' <<< "${usage_data}" 2>/dev/null)
   fi
 
+  # The 5h window opens the limits group. It keeps its own reset, which is
+  # a different instant from the weekly one and so cannot be shared.
   if [[ -n "${five_hour_pct}" ]]; then
     reset_text=$(format_epoch_time "${five_hour_reset_epoch}" time)
-    line+="${SEP}$(limit_segment '5h' "${five_hour_pct}" "${reset_text}")"
+    limits_group=$(limit_segment '5h' "${five_hour_pct}" "${reset_text}")
   fi
+  # The weekly total continues the group after the 5h window. Its reset is
+  # printed after the last member, not here, because the per-model weekly
+  # limits that follow share it.
   if [[ -n "${seven_day_pct}" ]]; then
     seven_day_reset_text=$(format_epoch_time "${seven_day_reset_epoch}" \
       datetime)
-    line+="${SEP}$(limit_segment '7d' "${seven_day_pct}" \
-      "${seven_day_reset_text}")"
+    weekly_group=$(limit_segment '7d' "${seven_day_pct}" '')
   fi
 
-  # Per-model 7d segments, e.g. "7d Fable ◉◉◉◉◕ 96%". The reset time
-  # is shown only when it differs from the 7d total, to save width.
+  # Per-model weekly limits, e.g. the "· fable ◉◉◉◉◕ 96%" in
+  # "7d ◉◉◕○○ 57% · fable ◉◉◉◉◕ 96% ⟳ sep 22, 11:00". One that shares the
+  # total's reset joins the group and drops its own "7d" and timestamp,
+  # both of which the group already carries. One that resets at some other
+  # time cannot borrow either, so it stays a segment of its own, after the
+  # group, fully labelled.
   if [[ -n "${scoped_limits}" ]]; then
     while IFS="${FIELD_SEP}" read -r name pct_raw reset_iso; do
       [[ -z "${name}" ]] && continue
       printf -v pct '%.0f' "${pct_raw}" 2>/dev/null || pct=0
+      name=$(to_lower "${name}")
       reset_text=''
       if reset_epoch=$(iso_to_epoch "${reset_iso}"); then
         reset_text=$(format_epoch_time "${reset_epoch}" datetime)
-        [[ "${reset_text}" == "${seven_day_reset_text}" ]] && reset_text=''
       fi
-      line+="${SEP}$(limit_segment "7d ${name}" "${pct}" "${reset_text}")"
+      if [[ -n "${weekly_group}" && -n "${reset_text}" \
+          && "${reset_text}" == "${seven_day_reset_text}" ]]; then
+        weekly_group+="${GROUP_SEP}$(limit_segment "${name}" "${pct}" '')"
+      else
+        weekly_extra+="${SEP}$(limit_segment "7d ${name}" "${pct}" \
+          "${reset_text}")"
+      fi
     done <<< "${scoped_limits}"
   fi
+
+  if [[ -n "${weekly_group}" ]]; then
+    weekly_group+=$(reset_marker "${seven_day_reset_text}")
+    if [[ -n "${limits_group}" ]]; then
+      limits_group+="${GROUP_SEP}${weekly_group}"
+    else
+      limits_group="${weekly_group}"
+    fi
+  fi
+  [[ -n "${limits_group}" ]] && line+="${SEP}${limits_group}"
+  line+="${weekly_extra}"
 
   if [[ "${extra_enabled}" == true && -n "${usage_data}" ]]; then
     line+="${SEP}$(extra_usage_segment "${usage_data}")"
   fi
+  line+="${tail_seg}"
 
   printf '%s' "${line}"
 }
@@ -884,7 +969,7 @@ main() {
 
   input=$(cat)
   if [[ -z "${input}" ]]; then
-    printf 'Claude'
+    printf 'claude'
     return 0
   fi
   [[ -d "${CACHE_DIR}" ]] || mkdir -p "${CACHE_DIR}"
