@@ -246,6 +246,9 @@ iso_to_epoch() {
   local iso=$1
   local epoch stripped utc=false
 
+  # GNU date reads an empty string as today at midnight, so a missing
+  # timestamp would otherwise turn into a plausible-looking one.
+  has_value "${iso}" || return 1
   epoch=$(date -d "${iso}" +%s 2>/dev/null)
   if [[ -z "${epoch}" ]]; then
     stripped="${iso%%.*}"
@@ -762,9 +765,9 @@ render_line() {
     IFS="${FIELD_SEP}" read -r api_five_hour_used api_five_hour_resets \
       api_seven_day_used api_seven_day_resets extra_enabled < <(
       jq -r --arg sep "${FIELD_SEP}" '[
-        (.five_hour.utilization // 0),
+        (.five_hour.utilization // ""),
         (.five_hour.resets_at // ""),
-        (.seven_day.utilization // 0),
+        (.seven_day.utilization // ""),
         (.seven_day.resets_at // ""),
         (.extra_usage.is_enabled // false)
       ] | map(tostring) | join($sep)' <<< "${usage_data}" 2>/dev/null
@@ -774,8 +777,12 @@ render_line() {
         && -n "${api_five_hour_used}" ]]; then
       printf -v five_hour_pct '%.0f' "${api_five_hour_used}" 2>/dev/null
       five_hour_reset_epoch=$(iso_to_epoch "${api_five_hour_resets}")
-      printf -v seven_day_pct '%.0f' "${api_seven_day_used}" 2>/dev/null
-      seven_day_reset_epoch=$(iso_to_epoch "${api_seven_day_resets}")
+      # Absent rather than zero: a response without a weekly total should
+      # print no 7d segment, not a full-looking one reading 0%.
+      if [[ -n "${api_seven_day_used}" ]]; then
+        printf -v seven_day_pct '%.0f' "${api_seven_day_used}" 2>/dev/null
+        seven_day_reset_epoch=$(iso_to_epoch "${api_seven_day_resets}")
+      fi
     fi
 
     # Per-model weekly limits. Prefer limits[] entries of kind weekly_scoped
