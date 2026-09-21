@@ -179,7 +179,36 @@ add_ssh_keys() {
 }
 
 #######################################
-# Point gpg-agent and git at the right binaries. gpg-agent on linux finds
+# Set one "key value" line in gpg-agent.conf, under GNUPGHOME when that is
+# set and ~/.gnupg otherwise, which is the same file gpg itself reads. Any
+# other line with
+# the same key is dropped, so a stale value (a pinentry from an intel
+# homebrew install, a ttl from an older version of this file) does not
+# linger. Writing nothing when the line is already there matters: the reload
+# that a change needs also flushes every cached passphrase, so a config
+# rewritten on each shell start would undo unlock_gpg_keys every time.
+# Globals:
+#   GNUPGHOME, HOME
+# Arguments:
+#   Option name, option value
+# Returns:
+#   0 if the file was changed, 1 if it already said this
+#######################################
+set_gpg_agent_conf() {
+  local key="$1" value="$2"
+  local dir="${GNUPGHOME:-${HOME}/.gnupg}"
+  local conf="${dir}/gpg-agent.conf"
+
+  grep -qsx "${key} ${value}" "${conf}" && return 1
+
+  [[ -d "${dir}" ]] || mkdir -p -m 0700 "${dir}"
+  { grep -vs "^${key} " "${conf}"
+    echo "${key} ${value}"; } > "${conf}.tmp" && mv "${conf}.tmp" "${conf}"
+}
+
+#######################################
+# Point gpg-agent and git at the right binaries, and let the agent hold a
+# passphrase for as long as ssh-agent holds a key. gpg-agent on linux finds
 # /usr/bin/pinentry by itself; on macOS it needs pinentry-mac from Homebrew.
 # Files are only written when the current value differs.
 #
@@ -190,30 +219,134 @@ add_ssh_keys() {
 #   HOMEBREW_PREFIX, OSTYPE
 #######################################
 setup_gpg() {
-  local gpg_bin pinentry
-  local conf="${HOME}/.gnupg/gpg-agent.conf"
+  local gpg_bin pinentry reload=
   local git_local="${HOME}/.gitconfig.local"
 
   gpg_bin=$(command -v gpg) || return 0
+
+  # gpg-agent caches the passphrase, not the key, and by default forgets it
+  # 600s after the last use or 7200s after it was typed. ssh-agent has no
+  # such limit, so a key unlocked at shell start would be gone by mid
+  # morning while the ssh key was still there. 400 days is the agent's way
+  # of saying "until it is restarted", which a reboot does.
+  set_gpg_agent_conf default-cache-ttl 34560000 && reload=1
+  set_gpg_agent_conf max-cache-ttl 34560000 && reload=1
 
   if [[ "${OSTYPE}" == darwin* ]]; then
     pinentry="${HOMEBREW_PREFIX}/bin/pinentry-mac"
     if [[ ! -x "${pinentry}" ]]; then
       err "missing ${pinentry}, brew install pinentry-mac ?"
-    elif ! grep -qsx "pinentry-program ${pinentry}" "${conf}"; then
-      [[ -d "${HOME}/.gnupg" ]] || mkdir -m 0700 "${HOME}/.gnupg"
-      # Replace any old pinentry-program line, e.g. from an intel install.
-      { grep -vs '^pinentry-program ' "${conf}"
-        echo "pinentry-program ${pinentry}"; } > "${conf}.tmp" \
-        && mv "${conf}.tmp" "${conf}"
-      gpgconf --reload gpg-agent 2> /dev/null
+    else
+      set_gpg_agent_conf pinentry-program "${pinentry}" && reload=1
     fi
   fi
+
+  [[ -n "${reload}" ]] && gpgconf --reload gpg-agent 2> /dev/null
 
   if command -v git &> /dev/null \
       && [[ "$(git config --file "${git_local}" --get gpg.program)" != "${gpg_bin}" ]]; then
     git config --file "${git_local}" gpg.program "${gpg_bin}"
   fi
+  return 0
+}
+
+#######################################
+# Check whether gpg-agent answers. gpg-connect-agent starts one if none is
+# running, which is the gpg counterpart of setup_ssh_agent: the agent lives
+# on a socket under /run/user and every shell shares it.
+# Returns:
+#   0 if the agent answers, 1 otherwise
+#######################################
+gpg_agent_alive() {
+  gpg-connect-agent /bye &> /dev/null
+}
+
+#######################################
+# Ask gpg-agent about one private key. The reply is
+#   S KEYINFO <keygrip> <type> <serialno> <idstr> <cached> <protection> ...
+# where cached is 1 or -, and protection is P for a key behind a passphrase
+# and C for one stored in the clear. Nothing is signed, so this neither asks
+# for a passphrase nor caches one as a side effect.
+# Arguments:
+#   Keygrip
+# Outputs:
+#   The cached and protection fields, space separated
+# Returns:
+#   0 if the agent knows the key, 1 otherwise
+#######################################
+gpg_key_state() {
+  local grip cached protection
+  read -r _ _ grip _ _ _ cached protection _ \
+    < <(gpg-connect-agent "keyinfo $1" /bye 2> /dev/null)
+  [[ "${grip}" == "$1" ]] || return 1
+  echo "${cached} ${protection}"
+}
+
+#######################################
+# Unlock one private key, asking for its passphrase through pinentry.
+#
+# There is no gpg equivalent of ssh-add: the agent reads a key only when an
+# operation needs it. So an operation the key can actually do is made up and
+# its output thrown away. The trailing "!" pins gpg to this exact key
+# instead of letting it pick a subkey. A key that can neither sign nor
+# encrypt, certify-only or authenticate-only, has no gpg command to drive
+# it, so the agent is asked for a bare signature over a block of zeroes.
+#
+# Success comes from the exit status, not from the agent's cache: when the
+# agent already learnt this passphrase from a sibling key it unlocks this
+# one without recording it under its own keygrip, and the cache would report
+# a perfectly usable key as locked.
+# Arguments:
+#   Keygrip, fingerprint, capability letters from --with-colons
+# Returns:
+#   0 if the key is now usable, 1 if not
+#######################################
+unlock_gpg_key() {
+  local grip="$1" fpr="$2" caps="$3"
+
+  case "${caps}" in
+    *s*)
+      echo | gpg --batch --local-user "${fpr}!" --sign --output /dev/null
+      ;;
+    *e*)
+      echo | gpg --batch --trust-model always --recipient "${fpr}!" --encrypt \
+        | gpg --batch --decrypt --output /dev/null 2> /dev/null
+      ;;
+    *)
+      ! printf 'SIGKEY %s\nSETHASH --hash=sha256 %064d\nPKSIGN\nBYE\n' "${grip}" 0 \
+        | gpg-connect-agent --quiet 2>&1 | grep -q '^ERR'
+      ;;
+  esac
+}
+
+#######################################
+# Unlock every passphrase-protected secret key the agent does not hold yet.
+# The counterpart of add_ssh_keys, and it runs next to it at every shell
+# start. Keys come from the keyring rather than from the agent's own list,
+# which also holds keygrips whose public half has since been deleted.
+#
+# The awk walks the colon records: sec and ssb open a key and carry its
+# capabilities, the first fpr after one is its fingerprint, and grp its
+# keygrip.
+# Returns:
+#   0, or 1 when no agent answers
+#######################################
+unlock_gpg_keys() {
+  local grip fpr caps cached protection
+
+  command -v gpg &> /dev/null || return 0
+  gpg_agent_alive || { err 'no gpg-agent'; return 1; }
+
+  while read -r grip fpr caps; do
+    read -r cached protection < <(gpg_key_state "${grip}") || continue
+    [[ "${protection}" == 'P' ]] || continue  # no passphrase, nothing to unlock
+    [[ "${cached}" == '1' ]] && continue      # the agent already has it
+    unlock_gpg_key "${grip}" "${fpr}" "${caps}" || err "gpg key ${fpr} is still locked"
+  done < <(gpg --list-secret-keys --with-keygrip --with-colons 2> /dev/null | awk -F: '
+    $1 == "sec" || $1 == "ssb" { caps = $12; fpr = ""; next }
+    $1 == "fpr" && fpr == ""   { fpr = $10; next }
+    $1 == "grp" && fpr != ""   { print $10, fpr, caps }')
+  return 0
 }
 
 #######################################
@@ -828,6 +961,7 @@ fi
 setup_ssh_agent
 add_ssh_keys
 setup_gpg
+unlock_gpg_keys
 
 # Aliases. GNU ls takes --color, BSD ls (macOS) takes -G.
 if ls --color=auto -d / &> /dev/null; then

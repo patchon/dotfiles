@@ -38,11 +38,45 @@ Then, per machine:
 - **ssh.** `.bashrc` loads every passphrase-protected key in `~/.ssh` into the
   agent. On macOS the passphrases are stored in the keychain after the first
   prompt.
+- **gpg.** `.bashrc` unlocks every passphrase-protected secret key the agent
+  does not already hold, the same way it loads ssh keys, and sets the agent's
+  cache to 400 days so an unlocked key survives until the agent is restarted.
+  See below.
 - **Claude Code.** `brew install jq`, then
   `.claude/scripts/sync-claude-settings.sh apply` merges the shared settings
   into `~/.claude/settings.json`. Add `--no-plugins` to leave the plugin
   marketplaces out. `export` copies changes made in Claude Code back into the
   repo, and `diff` shows what `apply` would change.
+
+## Keys at shell start
+
+`.bashrc` unlocks ssh and gpg keys the same way, next to each other at the
+bottom of the file: look at what the agent already holds, and ask only for
+what is missing.
+
+For ssh that is `add_ssh_keys`, which walks `~/.ssh`, skips keys with no
+passphrase and keys the agent already lists, and runs `ssh-add` on the rest.
+
+For gpg it is `unlock_gpg_keys`. There is no `ssh-add` for gpg: the agent
+reads a private key only when some operation needs it, so the function makes
+one up per key, a throwaway signature or a decrypt of something it just
+encrypted, and discards the result. What it is really after is the side
+effect, pinentry asking for the passphrase.
+
+Two details are worth knowing when this misbehaves:
+
+- gpg-agent caches the passphrase, not the key, and forgets it by default
+  600 seconds after the last use. `setup_gpg` writes `default-cache-ttl` and
+  `max-cache-ttl` of 400 days into `gpg-agent.conf`, under `GNUPGHOME` when
+  that is set and `~/.gnupg` otherwise, so it behaves
+  like ssh-agent, which never forgets. That file is only written when a value
+  differs, because applying it reloads the agent and a reload flushes every
+  cached passphrase.
+- `gpg-connect-agent 'keyinfo --list' /bye` shows what the agent holds. The
+  sixth field after the keygrip is 1 when the passphrase is cached and `-`
+  when it is not, and the next one is `P` for a key behind a passphrase. A
+  key can be usable while showing `-`: unlocking one key also lets its
+  siblings through, without recording them under their own keygrip.
 
 ## Host-specific git settings
 
