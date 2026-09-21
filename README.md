@@ -96,6 +96,12 @@ content:
   keepBackup = false
 ```
 
+`git config --file` indents every entry it writes with a tab and has no
+option for anything else, so `setup_gpg` re-indents the file with two spaces
+afterwards, matching `.gitconfig`. It only rewrites a file that still holds a
+leading tab, and only leading tabs are touched, so a tab inside a value such
+as an alias survives.
+
 ## Prompt
 
 Segment order and colours are the `PL_SEGMENTS` list in `.pureline.conf`.

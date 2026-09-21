@@ -207,6 +207,32 @@ set_gpg_agent_conf() {
 }
 
 #######################################
+# Re-indent a git config file with spaces. git config indents every entry it
+# writes with one tab and offers no way to ask for anything else, so a file
+# it has touched is normalised afterwards. Two spaces, to match .gitconfig
+# in this repo.
+#
+# Only a file that still holds a leading tab is rewritten, for the same
+# reason set_gpg_agent_conf looks before it writes: a shell start should not
+# touch a file it has nothing to change. Leading tabs are the only ones
+# replaced, so a tab inside a value is left alone.
+#
+# grep -P and sed \t are GNU only, hence the literal tab.
+# Arguments:
+#   Path to the file
+# Returns:
+#   0 if the file was rewritten, 1 if it needed nothing
+#######################################
+space_indent_git_config() {
+  local file="$1" tab=$'\t'
+
+  grep -qs "^${tab}" "${file}" || return 1
+
+  sed -E "s/^${tab}+/  /" "${file}" > "${file}.tmp" \
+    && mv "${file}.tmp" "${file}"
+}
+
+#######################################
 # Point gpg-agent and git at the right binaries, and let the agent hold a
 # passphrase for as long as ssh-agent holds a key. gpg-agent on linux finds
 # /usr/bin/pinentry by itself; on macOS it needs pinentry-mac from Homebrew.
@@ -243,9 +269,11 @@ setup_gpg() {
 
   [[ -n "${reload}" ]] && gpgconf --reload gpg-agent 2> /dev/null
 
-  if command -v git &> /dev/null \
-      && [[ "$(git config --file "${git_local}" --get gpg.program)" != "${gpg_bin}" ]]; then
-    git config --file "${git_local}" gpg.program "${gpg_bin}"
+  if command -v git &> /dev/null; then
+    if [[ "$(git config --file "${git_local}" --get gpg.program)" != "${gpg_bin}" ]]; then
+      git config --file "${git_local}" gpg.program "${gpg_bin}"
+    fi
+    space_indent_git_config "${git_local}"
   fi
   return 0
 }
