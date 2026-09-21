@@ -105,6 +105,11 @@ command! Vb execute "normal! \<C-v>"
 highlight ColorColumn ctermbg=darkred guibg=red
 set colorcolumn=80
 
+" Toggle the vertical bar. The width comes back from the global value of the
+" option, which the set above leaves alone, so it is only written once and
+" changing it there changes what the toggle restores.
+map öö :let &l:colorcolumn = empty(&l:colorcolumn) ? &g:colorcolumn : ''<cr>
+
 "
 " Functions
 "
