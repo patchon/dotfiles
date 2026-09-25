@@ -534,6 +534,74 @@ check_tcp_port() {
 }
 
 #######################################
+# Print the first http or https CA Issuers URL in a certificate's Authority
+# Information Access extension: where the CA that signed it publishes its own
+# certificate. The ldap URLs that Active Directory CAs list first are skipped.
+# Arguments:
+#   Certificate, PEM
+# Outputs:
+#   The URL on stdout, nothing if there is none
+#######################################
+ca_issuers_url() {
+  local line
+  while IFS= read -r line; do
+    case "${line}" in
+      *'CA Issuers - URI:http://'*|*'CA Issuers - URI:https://'*)
+        echo "${line#*URI:}"
+        return
+        ;;
+    esac
+  done < <(openssl x509 -noout -text <<< "$1" 2> /dev/null)
+}
+
+#######################################
+# Download a CA certificate from a CA Issuers URL, the way browsers fill in a
+# missing intermediate. RFC 5280 has the URL serve one DER certificate or a
+# "certs-only" PKCS#7 bundle (.p7c) of them; a few CAs serve PEM instead.
+# Arguments:
+#   URL
+# Outputs:
+#   Every certificate found, as PEM, on stdout, or on failure why
+# Returns:
+#   0 on success, 1 if not
+#######################################
+fetch_ca_cert() {
+  local url="$1" tmp reason out='' status=0
+  if ! command -v curl &> /dev/null; then
+    echo 'curl not found'
+    return 1
+  fi
+  if ! tmp=$(mktemp 2>&1); then
+    echo "${tmp}"
+    return 1
+  fi
+  # curl -sS says why in one line, e.g. "curl: (22) The requested URL
+  # returned error: 404"; keep what follows the error number.
+  if ! reason=$(curl -fsSL --max-time 5 -o "${tmp}" "${url}" 2>&1); then
+    reason="${reason%%$'\n'*}"
+    reason="${reason#curl: }"
+    reason="${reason#\(*\) }"
+    reason="${reason,}"
+    echo "${reason:-curl failed}"
+    status=1
+  else
+    out=$(openssl x509 -inform DER -in "${tmp}" 2> /dev/null) \
+      || out=$(openssl x509 -in "${tmp}" 2> /dev/null) \
+      || out=$(openssl pkcs7 -inform DER -print_certs -in "${tmp}" 2> /dev/null) \
+      || out=$(openssl pkcs7 -print_certs -in "${tmp}" 2> /dev/null)
+    if [[ "${out}" == *'-----BEGIN CERTIFICATE-----'* ]]; then
+      # -print_certs puts subject and issuer lines around each one.
+      sed -n '/^-----BEGIN CERTIFICATE-----$/,/^-----END CERTIFICATE-----$/p' <<< "${out}"
+    else
+      echo 'the file is neither a certificate nor a PKCS#7 bundle of them'
+      status=1
+    fi
+  fi
+  rm -f "${tmp}"
+  return "${status}"
+}
+
+#######################################
 # Show the certificates a TLS server sends and check that the chain is set up
 # the way clients expect: the server certificate first, then every
 # intermediate in signing order, no root, and a chain that verifies against
@@ -545,6 +613,9 @@ check_tcp_port() {
 # openssl on the same machine. SSL_CERT_FILE=bundle.pem or SSL_CERT_DIR=dir
 # names another store; openssl still adds its default directory and Apple's
 # LibreSSL its keychain roots, so a bundle cannot make a public root untrusted.
+# When the issuer at the top of the chain was neither sent nor found in the
+# store, it is downloaded with curl from the CA Issuers URL, and so on up to a
+# root, to tell a missing intermediate from a CA that is not trusted here.
 # The hostname check and the "your store had the intermediate" detection need
 # OpenSSL 1.1.1+ and are skipped on LibreSSL. The connect timeout comes from
 # probe_tcp_port, since s_client has none; a port that accepts the connection
@@ -566,13 +637,15 @@ report_tls_chain() {
   local -r usage='usage: check_tls_chain <host> [port]'
   local -r nameopt='RFC2253,sep_comma_plus_space,-esc_msb'
   local raw line info ssl_lib ssl_dir store now epoch days when plural
-  local i j k n top next aia detail broken entry status name rest colour cont
-  local missing unit
+  local i j k n top next detail broken entry status name rest colour cont
+  local missing unit url from want fsub fiss stop lost last inter root with
+  local got field count
   local proto='' new_proto='' cipher='' vcode='' vtext='' pem='' in_pem=false
   local checkname='-checkhost' connect="${host}:${port}" failed=0
   local bold='' dim='' red='' green='' yellow='' cyan='' reset='' arrow
   local -a certs=() subject=() issuer=() notafter=() role=() checks=()
   local -a sni=() verify_opts=() supplied=()
+  local -a fetched=() fsubject=() fissuer=() furl=()
 
   if [[ -z "${host}" || ! "${port}" =~ ^[1-9][0-9]{0,4}$ ]] || (( port > 65535 )); then
     err "${usage}"
@@ -801,69 +874,154 @@ report_tls_chain() {
   [[ "${ssl_lib}" == LibreSSL* ]] || verify_opts=(-show_chain -nameopt "${nameopt}")
   [[ -n "${SSL_CERT_FILE:-}" ]] && verify_opts+=(-CAfile "${SSL_CERT_FILE}")
   [[ -n "${SSL_CERT_DIR:-}" ]] && verify_opts+=(-CApath "${SSL_CERT_DIR}")
-  while IFS= read -r line; do
-    case "${line}" in
-      'depth='*)
-        [[ "${line}" == *' (untrusted)' ]] || supplied+=("${line#depth=*: }")
+  # A missing issuer (error 20) can be an intermediate the server leaves out
+  # or a root this store lacks. To tell which, fetch it from the CA Issuers
+  # URL and verify again, passing it as untrusted like the certificates sent,
+  # until openssl reaches a root. Four fetches cover any real chain.
+  from="${certs[top]}" want="${issuer[top]}" stop=''
+  while true; do
+    vcode='' vtext='' supplied=()
+    while IFS= read -r line; do
+      case "${line}" in
+        'depth='*)
+          [[ "${line}" == *' (untrusted)' ]] || supplied+=("${line#depth=*: }")
+          ;;
+        'error '*' depth lookup:'*)
+          if [[ -z "${vcode}" ]]; then
+            vtext="${line#error }"  # e.g. "20 at 0 depth lookup: unable to ..."
+            vcode="${vtext%% *}"
+            vtext="${vtext#*depth lookup:}"
+            vtext="${vtext# }"
+          fi
+          ;;
+        *': OK') vcode=0 ;;
+      esac
+    done < <(openssl verify "${verify_opts[@]}" \
+      -untrusted <(printf '%s\n' "${certs[@]}" "${fetched[@]}") \
+      <(printf '%s\n' "${certs[0]}") 2>&1)
+
+    if [[ "${vcode}" != 20 ]] || (( ${#fetched[@]} == 4 )); then
+      break
+    fi
+    url=$(ca_issuers_url "${from}")
+    [[ -n "${url}" ]] || break
+    if ! got=$(fetch_ca_cert "${url}"); then
+      stop="could not fetch it from ${url}: ${got}"
+      break
+    fi
+    # A bundle can hold several certificates issued to the CA, such as
+    # cross-certificates; follow the first one with the subject wanted.
+    pem='' fsub='' count=0
+    while IFS= read -r line; do
+      pem+="${line}"$'\n'
+      [[ "${line}" == '-----END CERTIFICATE-----' ]] || continue
+      count=$(( count + 1 ))
+      fsub='' fiss=''
+      while IFS= read -r field; do
+        case "${field}" in
+          subject=*) field="${field#subject=}"; fsub="${field# }" ;;
+          issuer=*) field="${field#issuer=}"; fiss="${field# }" ;;
+        esac
+      done < <(openssl x509 -noout -subject -issuer -nameopt "${nameopt}" <<< "${pem}" 2> /dev/null)
+      [[ "${fsub}" == "${want}" ]] && break
+      pem=''
+    done <<< "${got}"
+    if [[ "${fsub}" != "${want}" ]]; then
+      if (( count == 1 )); then
+        stop="could not fetch it: ${url} has \"${fsub}\" instead"
+      else
+        stop="could not fetch it: none of the ${count} certificates at ${url} has that subject"
+      fi
+      break
+    fi
+    fetched+=("${pem}") fsubject+=("${fsub}") fissuer+=("${fiss}") furl+=("${url}")
+    from="${pem}" want="${fiss}"
+  done
+
+  lost="issuer \"${issuer[top]}\" of certificate ${top}"
+  lost+=" was neither sent nor found in"$'\n'"${store}"
+  if (( ${#fetched[@]} > 0 )); then
+    # Self-signed ones are roots, the server should send all the others.
+    detail="${lost}" inter=0
+    for (( i = 0; i < ${#fetched[@]}; i++ )); do
+      [[ "${fsubject[i]}" == "${fissuer[i]}" ]] && continue
+      if (( i == 0 )); then
+        detail+=$'\n'"fetched it from ${furl[i]}: an intermediate, the server should send it"
+      else
+        detail+=$'\n'"fetched its issuer \"${fsubject[i]}\" from ${furl[i]}:"
+        detail+=" an intermediate, the server should send it too"
+      fi
+      inter=$(( inter + 1 ))
+    done
+    last=$(( ${#fetched[@]} - 1 ))
+    with=it
+    (( inter > 1 )) && with=them
+    case "${vcode}" in
+      0)
+        root="${fissuer[last]}"
+        (( ${#supplied[@]} > 0 )) && root="${supplied[-1]}"
+        detail+=$'\n'"with ${with} the chain verifies to root \"${root}\" in the store"
         ;;
-      'error '*' depth lookup:'*)
-        if [[ -z "${vcode}" ]]; then
-          vtext="${line#error }"  # e.g. "20 at 0 depth lookup: unable to ..."
-          vcode="${vtext%% *}"
-          vtext="${vtext#*depth lookup:}"
-          vtext="${vtext# }"
+      19)
+        if (( inter == 0 )); then
+          detail+=$'\n'"fetched it from ${furl[0]}: a root, so the server sends all it should;"
+          detail+=" the CA is not trusted here"
+        else
+          detail+=$'\n'"its root \"${fsubject[last]}\" is not in the store either,"
+          detail+=" the CA is not trusted here"
         fi
         ;;
-      *': OK') vcode=0 ;;
+      20)
+        detail+=$'\n'"its issuer \"${fissuer[last]}\" is not in the store either"
+        [[ -n "${stop}" ]] && detail+=$'\n'"${stop}"
+        ;;
+      *) detail+=$'\n'"with ${with}, verify error ${vcode:-?}: ${vtext}" ;;
     esac
-  done < <(openssl verify "${verify_opts[@]}" -untrusted <(printf '%s\n' "${certs[@]}") \
-    <(printf '%s\n' "${certs[0]}") 2>&1)
-
-  case "${vcode}" in
-    0)
-      # openssl prefers the store's copy of an intermediate over the sent one,
-      # so a store entry below the anchor is only missing from the server when
-      # no sent certificate has its subject.
-      missing=''
-      for (( i = 0; i < ${#supplied[@]} - 1; i++ )); do
-        for (( j = 0; j < n; j++ )); do
-          [[ "${subject[j]}" == "${supplied[i]}" ]] && continue 2
+    checks+=("FAIL trusted ${detail}")
+  else
+    case "${vcode}" in
+      0)
+        # openssl prefers the store's copy of an intermediate over the sent one,
+        # so a store entry below the anchor is only missing from the server when
+        # no sent certificate has its subject.
+        missing=''
+        for (( i = 0; i < ${#supplied[@]} - 1; i++ )); do
+          for (( j = 0; j < n; j++ )); do
+            [[ "${subject[j]}" == "${supplied[i]}" ]] && continue 2
+          done
+          missing="${supplied[i]}"
+          break
         done
-        missing="${supplied[i]}"
-        break
-      done
-      if [[ -n "${missing}" ]]; then
-        detail="supplied intermediate \"${missing}\", which other clients"
-        detail+=" will not have. the server should send it"
-        checks+=("warn trusted verifies, but only because ${store}"$'\n'"${detail}")
-      elif (( ${#supplied[@]} > 0 )); then
-        checks+=("ok trusted anchored by \"${supplied[-1]}\""$'\n'"in ${store}")
-      else
-        checks+=("ok trusted chain verifies against ${store}")
-      fi
-      ;;
-    20)
-      aia=$(openssl x509 -noout -text <<< "${certs[top]}" 2> /dev/null \
-        | grep -m 1 'CA Issuers - URI:')
-      aia="${aia#*URI:}"
-      detail="issuer \"${issuer[top]}\" of certificate ${top}"
-      detail+=" was neither sent nor found in"$'\n'"${store}"
-      detail+=$'\n'"the server is missing intermediate(s), or the CA is not trusted here"
-      [[ -n "${aia}" ]] && detail+=$'\n'"the issuer publishes it at ${aia}"
-      checks+=("FAIL trusted ${detail}")
-      ;;
-    19)
-      detail="root \"${subject[top]}\" was sent but is not in"$'\n'"${store}"
-      checks+=("FAIL trusted ${detail}")
-      ;;
-    18)
-      detail="certificate 0 is self-signed and not in"$'\n'"${store}"
-      checks+=("FAIL trusted ${detail}")
-      ;;
-    10) checks+=("FAIL trusted a certificate has expired, see notAfter above") ;;
-    '') checks+=("FAIL trusted openssl verify gave no result") ;;
-    *) checks+=("FAIL trusted verify error ${vcode}: ${vtext}") ;;
-  esac
+        if [[ -n "${missing}" ]]; then
+          detail="supplied intermediate \"${missing}\", which other clients"
+          detail+=" will not have. the server should send it"
+          checks+=("warn trusted verifies, but only because ${store}"$'\n'"${detail}")
+        elif (( ${#supplied[@]} > 0 )); then
+          checks+=("ok trusted anchored by \"${supplied[-1]}\""$'\n'"in ${store}")
+        else
+          checks+=("ok trusted chain verifies against ${store}")
+        fi
+        ;;
+      20)
+        # Nothing could be fetched, so both explanations remain.
+        detail="${lost}"
+        detail+=$'\n'"the server is missing intermediate(s), or the CA is not trusted here"
+        [[ -n "${stop}" ]] && detail+=$'\n'"${stop}"
+        checks+=("FAIL trusted ${detail}")
+        ;;
+      19)
+        detail="root \"${subject[top]}\" was sent but is not in"$'\n'"${store}"
+        checks+=("FAIL trusted ${detail}")
+        ;;
+      18)
+        detail="certificate 0 is self-signed and not in"$'\n'"${store}"
+        checks+=("FAIL trusted ${detail}")
+        ;;
+      10) checks+=("FAIL trusted a certificate has expired, see notAfter above") ;;
+      '') checks+=("FAIL trusted openssl verify gave no result") ;;
+      *) checks+=("FAIL trusted verify error ${vcode}: ${vtext}") ;;
+    esac
+  fi
 
   printf -v cont '\n%17s' ''  # continuation lines align with the detail column
   for entry in "${checks[@]}"; do
