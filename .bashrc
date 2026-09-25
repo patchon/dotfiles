@@ -807,6 +807,7 @@ report_tls_chain() {
         when="  ${green}(${days} ${unit})${reset}"
       fi
     fi
+    (( i > 0 )) && echo
     printf ' %s[%d] %s%s\n' "${cyan}${bold}" "${i}" "${role[i]}" "${reset}"
     printf '     %ssubject%s   %s\n' "${dim}" "${reset}" "${subject[i]}"
     if [[ -n "${sans[i]}" ]]; then
