@@ -181,12 +181,11 @@ add_ssh_keys() {
 #######################################
 # Set one "key value" line in gpg-agent.conf, under GNUPGHOME when that is
 # set and ~/.gnupg otherwise, which is the same file gpg itself reads. Any
-# other line with
-# the same key is dropped, so a stale value (a pinentry from an intel
-# homebrew install, a ttl from an older version of this file) does not
-# linger. Writing nothing when the line is already there matters: the reload
-# that a change needs also flushes every cached passphrase, so a config
-# rewritten on each shell start would undo unlock_gpg_keys every time.
+# other line with the same key is dropped, so a stale value (a pinentry from
+# an intel homebrew install, a ttl from an older version of this file) does
+# not linger. Writing nothing when the line is already there matters: the
+# reload that a change needs also flushes every cached passphrase, so a
+# config rewritten on each shell start would undo unlock_gpg_keys every time.
 # Globals:
 #   GNUPGHOME, HOME
 # Arguments:
@@ -201,6 +200,9 @@ set_gpg_agent_conf() {
 
   grep -qsx "${key} ${value}" "${conf}" && return 1
 
+  # -m applies to the last directory only, the home, which is the one gpg
+  # wants 0700; any parents it creates get the usual mode.
+  # shellcheck disable=SC2174
   [[ -d "${dir}" ]] || mkdir -p -m 0700 "${dir}"
   { grep -vs "^${key} " "${conf}"
     echo "${key} ${value}"; } > "${conf}.tmp" && mv "${conf}.tmp" "${conf}"
