@@ -623,7 +623,7 @@ fetch_ca_cert() {
 # probe_tcp_port, since s_client has none; a port that accepts the connection
 # but never answers hangs until ctrl-c.
 # Globals:
-#   NO_COLOR, OSTYPE, SSL_CERT_DIR, SSL_CERT_FILE
+#   COLUMNS, NO_COLOR, OSTYPE, SSL_CERT_DIR, SSL_CERT_FILE
 # Arguments:
 #   Host name or address
 #   Port number, default 443
@@ -641,11 +641,11 @@ report_tls_chain() {
   local raw line info ssl_lib ssl_dir store now epoch days when plural
   local i j k n top next detail broken entry status name rest colour cont
   local missing unit url from want fsub fiss stop lost last inter root with
-  local got field count
+  local got field count san low lhost text col width
   local proto='' new_proto='' cipher='' vcode='' vtext='' pem='' in_pem=false
   local checkname='-checkhost' connect="${host}:${port}" failed=0
   local bold='' dim='' red='' green='' yellow='' cyan='' reset='' arrow
-  local -a certs=() subject=() issuer=() notafter=() role=() checks=()
+  local -a certs=() subject=() issuer=() notafter=() sans=() role=() checks=()
   local -a sni=() verify_opts=() supplied=()
   local -a fetched=() fsubject=() fissuer=() furl=()
 
@@ -723,15 +723,23 @@ report_tls_chain() {
 
   # RFC2253 order (CN first) prints the same on OpenSSL and LibreSSL and is
   # what the checks below compare; -esc_msb keeps non-ASCII names readable.
+  # The SANs come from the -text dump, on the line after its heading, as
+  # "DNS:a, DNS:b, IP Address:c" on both flavours; LibreSSL has no -ext.
   for (( i = 0; i < n; i++ )); do
-    subject[i]='' issuer[i]='' notafter[i]=''
-    info=$(openssl x509 -noout -subject -issuer -enddate -nameopt "${nameopt}" \
-      <<< "${certs[i]}" 2> /dev/null)
+    subject[i]='' issuer[i]='' notafter[i]='' sans[i]='' san=false
+    info=$(openssl x509 -noout -subject -issuer -enddate -text \
+      -nameopt "${nameopt}" <<< "${certs[i]}" 2> /dev/null)
     while IFS= read -r line; do
+      if [[ "${san}" == true ]]; then
+        sans[i]="${line#"${line%%[![:space:]]*}"}"
+        san=false
+        continue
+      fi
       case "${line}" in
         subject=*) line="${line#subject=}"; subject[i]="${line# }" ;;
         issuer=*) line="${line#issuer=}"; issuer[i]="${line# }" ;;
         notAfter=*) notafter[i]="${line#notAfter=}" ;;
+        *'X509v3 Subject Alternative Name:'*) san=true ;;
       esac
     done <<< "${info}"
   done
@@ -775,6 +783,9 @@ report_tls_chain() {
   echo
 
   now=$(date +%s)
+  lhost="${host,,}"
+  width=$(( ${COLUMNS:-80} - 15 ))  # what is left of a line after the labels
+  (( width < 20 )) && width=20
   for (( i = 0; i < n; i++ )); do
     # LC_ALL=C: openssl prints English month names whatever the locale is.
     if [[ "${OSTYPE}" == darwin* ]]; then
@@ -798,6 +809,35 @@ report_tls_chain() {
     fi
     printf ' %s[%d] %s%s\n' "${cyan}${bold}" "${i}" "${role[i]}" "${reset}"
     printf '     %ssubject%s   %s\n' "${dim}" "${reset}" "${subject[i]}"
+    if [[ -n "${sans[i]}" ]]; then
+      # Every name, wrapped under the value column. The one the host matches,
+      # exactly or through a wildcard for one label, is highlighted.
+      text='' col=0 rest="${sans[i]}, "
+      while [[ -n "${rest}" ]]; do
+        san="${rest%%, *}"
+        rest="${rest#*, }"
+        case "${san}" in
+          DNS:*) san="${san#DNS:}" ;;
+          'IP Address:'*) san="IP ${san#IP Address:}" ;;
+        esac
+        if (( col > 0 && col + 2 + ${#san} >= width )); then
+          printf -v text '%s,\n%15s' "${text}" ''
+          col=0
+        elif (( col > 0 )); then
+          text+=', '
+          col=$(( col + 2 ))
+        fi
+        col=$(( col + ${#san} ))
+        low="${san,,}"
+        if [[ "${low}" == "${lhost}" || "${low}" == "ip ${lhost}" ]] \
+            || [[ "${low}" == '*.'* && "${lhost}" == ?*.* \
+              && "${lhost#*.}" == "${low#\*.}" ]]; then
+          san="${bold}${green}${san}${reset}"
+        fi
+        text+="${san}"
+      done
+      printf '     %ssans%s      %s\n' "${dim}" "${reset}" "${text}"
+    fi
     printf '     %sissuer%s    %s\n' "${dim}" "${reset}" "${issuer[i]}"
     printf '     %snotAfter%s  %s%s\n' "${dim}" "${reset}" "${notafter[i]}" "${when}"
   done
