@@ -119,15 +119,27 @@ is_encrypted_key() {
 # takes the fingerprint from the .pub next to the key when there is one, and
 # from the key itself otherwise. No signing, so a hardware key is not asked
 # for a touch.
+#
+# gcr-ssh-agent, the wrapper GNOME puts on SSH_AUTH_SOCK, lists every key in
+# ~/.ssh that has a .pub next to it whether it holds the key or not, and
+# loads one through its own dialog the first time ssh needs it. The
+# ssh-agent it wraps sits on a sibling socket and lists only what it holds,
+# so that is the one asked.
+# Globals:
+#   SSH_AUTH_SOCK
 # Arguments:
 #   Path to private key
 # Returns:
 #   0 if the agent lists the key, 1 otherwise
 #######################################
 ssh_key_loaded() {
-  local fp
+  local fp sock="${SSH_AUTH_SOCK}"
   read -r _ fp _ < <(ssh-keygen -lf "$1" 2> /dev/null)
-  [[ -n "${fp}" ]] && ssh-add -l 2> /dev/null | grep -qF " ${fp} "
+  [[ -n "${fp}" ]] || return 1
+  if [[ "${sock}" == */gcr/ssh && -S "${sock%/ssh}/.ssh" ]]; then
+    sock="${sock%/ssh}/.ssh"
+  fi
+  SSH_AUTH_SOCK="${sock}" ssh-add -l 2> /dev/null | grep -qF " ${fp} "
 }
 
 #######################################

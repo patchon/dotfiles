@@ -55,7 +55,12 @@ bottom of the file: look at what the agent already holds, and ask only for
 what is missing.
 
 For ssh that is `add_ssh_keys`, which walks `~/.ssh`, skips keys with no
-passphrase and keys the agent already lists, and runs `ssh-add` on the rest.
+passphrase and keys the agent already holds, and runs `ssh-add` on the rest.
+On GNOME, `SSH_AUTH_SOCK` is gcr-ssh-agent, a wrapper that lists every key
+with a `.pub` in `~/.ssh` whether it holds it or not and loads one through its
+own dialog the first time ssh needs it. So the check asks the ssh-agent behind
+the wrapper, on the sibling `.ssh` socket, and those keys are added at shell
+start like everywhere else.
 
 For gpg it is `unlock_gpg_keys`. There is no `ssh-add` for gpg: the agent
 reads a private key only when some operation needs it, so the function makes
