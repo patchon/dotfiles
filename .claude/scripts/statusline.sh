@@ -4,10 +4,14 @@
 #
 # Reads the JSON that Claude Code writes to stdin and prints one line:
 #
-#   model[ »] │ effort │ ✎ context%[ ↑] │ [⚡ ]branch[*]
-#         │ 5h … · 7d … · <model> … ⟳ reset │ extra … │ ⏱ session │ ♨ cache
+#   model[ »] │ effort │ 󰏫 context%[ ↑] │ [󱐋 ]branch[*]
+#         │ 5h … · 7d … · <model> … 󰑐 reset │ extra … │ 󰔛 session │ 󰈸 cache
 #
 # Design notes:
+#   - Every icon is a Nerd Font Material Design glyph, so they all come from
+#     the primary font at one size. The gap after an icon is a no-break space
+#     (U+00A0): Ghostty widens a Nerd Font glyph to two cells when a plain
+#     space follows it, which would draw it larger than the rest.
 #   - The rendered line is cached per session for OUTPUT_CACHE_TTL seconds
 #     and re-rendered as soon as the model, effort, context usage,
 #     directory, cache warmth, 200k flag or fast mode in the stdin JSON
@@ -19,8 +23,8 @@
 #     no per-token premium beyond it, but every turn now processes 200k+
 #     tokens, which is slow and is what /usage flags as long context: a
 #     hint to /compact or /clear at the next natural break.
-#   - The cache segment shows ♨ and the time the prompt cache goes cold, or
-#     ❄ once it has; the next prompt after that re-sends the whole context.
+#   - The cache segment shows 󰈸 and the time the prompt cache goes cold, or
+#     󰜗 once it has; the next prompt after that re-sends the whole context.
 #   - Effort sits next to the model: both answer "what is running and how
 #     hard", so they read together rather than straddling the line.
 #   - The session clocks, elapsed time and cache expiry, are built into a
@@ -87,12 +91,11 @@ readonly SETTINGS_FILE="${HOME}/.claude/settings.json"
 readonly DEFAULT_CONTEXT_SIZE=200000
 readonly BAR_WIDTH=5
 readonly ISO_FORMAT='%Y-%m-%dT%H:%M:%S'
-# Marks the context-window percentage: U+270E, the pencil in its text
-# presentation rather than the U+270D+VS16 emoji this used to be. Text
-# presentation means it is one cell wide and takes a colour, so it can be
-# dimmed to match the clock beside it. Override with CLAUDE_CONTEXT_ICON to
-# try another one without editing this file.
-readonly CONTEXT_ICON="${CLAUDE_CONTEXT_ICON:-✎}"
+# Marks the context-window percentage: the Nerd Font pencil (U+F03EB), one
+# cell wide and coloured like text, so it can be dimmed to match the clock
+# beside it. Override with CLAUDE_CONTEXT_ICON to try another one without
+# editing this file.
+readonly CONTEXT_ICON="${CLAUDE_CONTEXT_ICON:-󰏫}"
 
 # Field separator between values extracted by jq. The ASCII unit separator
 # is used rather than tab: tab is IFS whitespace, so `read` would collapse
@@ -460,15 +463,16 @@ effort_segment() {
   local effort=$1
   local now=$2
 
+  # The gap after each glyph is a no-break space; see the header.
   case "${effort}" in
-    max) rainbow_text '● max' "${now}" ;;
-    ultracode) printf '%s' "${ORANGE}󰪥 ultra${RESET}" ;;
-    xhigh) printf '%s' "${ORANGE}󰪥 xhi${RESET}" ;;
-    high) printf '%s' "${YELLOW}󰪣 hi${RESET}" ;;
-    medium) printf '%s' "${CYAN}󰪡 med${RESET}" ;;
-    low) printf '%s' "${DARK_ORANGE}󰪟 lo${RESET}" ;;
-    auto) printf '%s' "${GREEN}󱎖 auto${RESET}" ;;
-    *) printf '%s' "${DIM}󱎖 std${RESET}" ;;
+    max) rainbow_text '󰝥 max' "${now}" ;;
+    ultracode) printf '%s' "${ORANGE}󰪥 ultra${RESET}" ;;
+    xhigh) printf '%s' "${ORANGE}󰪥 xhi${RESET}" ;;
+    high) printf '%s' "${YELLOW}󰪣 hi${RESET}" ;;
+    medium) printf '%s' "${CYAN}󰪡 med${RESET}" ;;
+    low) printf '%s' "${DARK_ORANGE}󰪟 lo${RESET}" ;;
+    auto) printf '%s' "${GREEN}󱎖 auto${RESET}" ;;
+    *) printf '%s' "${DIM}󱎖 std${RESET}" ;;
   esac
 }
 
@@ -512,7 +516,7 @@ parent_command() {
 #   Command line of the parent Claude Code process.
 #######################################
 skip_permissions_marker() {
-  [[ "$1" == *--dangerously-skip-permissions* ]] && printf '⚡  '
+  [[ "$1" == *--dangerously-skip-permissions* ]] && printf '󱐋 '
   return 0
 }
 
@@ -611,8 +615,8 @@ session_duration() {
 }
 
 #######################################
-# Render the prompt cache segment: "♨ HH:MM" while the cache is warm (the
-# time it goes cold), "❄" once it is cold.
+# Render the prompt cache segment: "󰈸 HH:MM" while the cache is warm (the
+# time it goes cold), "󰜗" once it is cold.
 # Arguments:
 #   Warm flag: "true", "false", or anything else when unknown.
 #   Expiry as epoch seconds (may be empty or "null").
@@ -626,18 +630,18 @@ cache_segment() {
 
   case "${warm}" in
     true)
-      printf '%s' "${GREEN}♨${RESET}"
+      printf '%s' "${GREEN}󰈸${RESET}"
       expires_text=$(format_epoch_time "${expires_at}" time)
       [[ -n "${expires_text}" ]] \
-        && printf ' %s' "${WHITE}${expires_text}${RESET}"
+        && printf ' %s' "${WHITE}${expires_text}${RESET}"
       ;;
-    false) printf '%s' "${CYAN}❄${RESET}" ;;
+    false) printf '%s' "${CYAN}󰜗${RESET}" ;;
   esac
   return 0
 }
 
 #######################################
-# Render the "⟳ <time>" reset marker, with its leading space. Kept apart
+# Render the "󰑐 <time>" reset marker, with its leading space. Kept apart
 # from limit_segment so a group of limits sharing one reset can print it
 # once, after its last member.
 # Arguments:
@@ -649,12 +653,12 @@ reset_marker() {
   local reset_text=$1
 
   [[ -n "${reset_text}" ]] || return 0
-  printf ' %s⟳%s %s%s%s' "${DIM}" "${RESET}" "${WHITE}" "${reset_text}" \
+  printf ' %s󰑐%s %s%s%s' "${DIM}" "${RESET}" "${WHITE}" "${reset_text}" \
     "${RESET}"
 }
 
 #######################################
-# Render a rate-limit segment: "<label> <bar> <pct>%[ ⟳ <reset>]".
+# Render a rate-limit segment: "<label> <bar> <pct>%[ 󰑐 <reset>]".
 # Arguments:
 #   Label, e.g. "5h", "7d" or "fable".
 #   Used percentage (integer).
@@ -674,7 +678,7 @@ limit_segment() {
 }
 
 #######################################
-# Render the extra-usage segment: "extra <bar> $used/$limit ⟳ <reset>".
+# Render the extra-usage segment: "extra <bar> $used/$limit 󰑐 <reset>".
 # Globals:
 #   FIELD_SEP, BAR_WIDTH
 # Arguments:
@@ -785,12 +789,12 @@ render_line() {
     effort='ultracode'
   fi
 
-  # model[ »] │ effort │ context %[↑] │ [⚡ ]branch │ … │ ⏱ session │ cache
+  # model[ »] │ effort │ context %[↑] │ [󱐋 ]branch │ … │ 󰔛 session │ cache
   pct_color=$(color_for_pct "${context_pct}")
   line="${BLUE}${model_name}${RESET}"
   [[ "${fast_mode}" == 'true' ]] && line+=" ${ORANGE}»${RESET}"
   line+="${SEP}$(effort_segment "${effort}" "${now}")"
-  line+="${SEP}${DIM}${CONTEXT_ICON}${RESET} ${pct_color}${context_pct}%${RESET}"
+  line+="${SEP}${DIM}${CONTEXT_ICON}${RESET} ${pct_color}${context_pct}%${RESET}"
   [[ "${exceeds_200k}" == 'true' ]] && line+=" ${RED}↑${RESET}"
   git_seg=$(git_segment "${cwd}")
   if [[ -n "${git_seg}" ]]; then
@@ -801,7 +805,7 @@ render_line() {
   # else, so they close the line.
   duration=$(session_duration "${duration_ms}")
   if [[ -n "${duration}" ]]; then
-    tail_seg+="${SEP}${DIM}⏱ ${RESET}${WHITE}${duration}${RESET}"
+    tail_seg+="${SEP}${DIM}󰔛 ${RESET}${WHITE}${duration}${RESET}"
   fi
   cache_seg=$(cache_segment "${cache_warm}" "${cache_expires}")
   if [[ -n "${cache_seg}" ]]; then
@@ -884,7 +888,7 @@ render_line() {
   fi
 
   # Per-model weekly limits, e.g. the "· fable 󰪥󰪥󰪥󰪥󰪣 96%" in
-  # "7d 󰪥󰪥󰪣󰝦󰝦 57% · fable 󰪥󰪥󰪥󰪥󰪣 96% ⟳ sep 22, 11:00". One that shares the
+  # "7d 󰪥󰪥󰪣󰝦󰝦 57% · fable 󰪥󰪥󰪥󰪥󰪣 96% 󰑐 sep 22, 11:00". One that shares the
   # total's reset joins the group and drops its own "7d" and timestamp,
   # both of which the group already carries. One that resets at some other
   # time cannot borrow either, so it stays a segment of its own, after the
