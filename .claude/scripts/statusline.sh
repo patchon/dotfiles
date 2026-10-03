@@ -194,7 +194,9 @@ color_for_pct() {
 }
 
 #######################################
-# Render a utilisation bar such as "◉◉◕○○".
+# Render a utilisation bar such as "󰪥󰪥󰪣󰝦󰝦". The glyphs are Nerd Font
+# Material Design circle slices (U+F0A9F/A1/A3/A5, U+F0766): the plain
+# U+25C9..U+25D5 circles are missing or mis-sized in most terminal fonts.
 # Arguments:
 #   Percentage (integer, clamped to 0..100).
 #   Bar width in cells.
@@ -223,15 +225,15 @@ build_bar() {
     fi
 
     if (( fill >= step )); then
-      bar+='◉'
+      bar+='󰪥'
     elif (( fill >= quarter * 3 )); then
-      bar+='◕'
+      bar+='󰪣'
     elif (( fill >= quarter * 2 )); then
-      bar+='◐'
+      bar+='󰪡'
     elif (( fill >= quarter )); then
-      bar+='◔'
+      bar+='󰪟'
     else
-      bar+="${DIM}○${bar_color}"
+      bar+="${DIM}󰝦${bar_color}"
     fi
   done
 
@@ -460,13 +462,13 @@ effort_segment() {
 
   case "${effort}" in
     max) rainbow_text '● max' "${now}" ;;
-    ultracode) printf '%s' "${ORANGE}◉ ultra${RESET}" ;;
-    xhigh) printf '%s' "${ORANGE}◉ xhi${RESET}" ;;
-    high) printf '%s' "${YELLOW}◕ hi${RESET}" ;;
-    medium) printf '%s' "${CYAN}◐ med${RESET}" ;;
-    low) printf '%s' "${DARK_ORANGE}◔ lo${RESET}" ;;
-    auto) printf '%s' "${GREEN}◑ auto${RESET}" ;;
-    *) printf '%s' "${DIM}◑ std${RESET}" ;;
+    ultracode) printf '%s' "${ORANGE}󰪥 ultra${RESET}" ;;
+    xhigh) printf '%s' "${ORANGE}󰪥 xhi${RESET}" ;;
+    high) printf '%s' "${YELLOW}󰪣 hi${RESET}" ;;
+    medium) printf '%s' "${CYAN}󰪡 med${RESET}" ;;
+    low) printf '%s' "${DARK_ORANGE}󰪟 lo${RESET}" ;;
+    auto) printf '%s' "${GREEN}󱎖 auto${RESET}" ;;
+    *) printf '%s' "${DIM}󱎖 std${RESET}" ;;
   esac
 }
 
@@ -881,8 +883,8 @@ render_line() {
     weekly_group=$(limit_segment '7d' "${seven_day_pct}" '')
   fi
 
-  # Per-model weekly limits, e.g. the "· fable ◉◉◉◉◕ 96%" in
-  # "7d ◉◉◕○○ 57% · fable ◉◉◉◉◕ 96% ⟳ sep 22, 11:00". One that shares the
+  # Per-model weekly limits, e.g. the "· fable 󰪥󰪥󰪥󰪥󰪣 96%" in
+  # "7d 󰪥󰪥󰪣󰝦󰝦 57% · fable 󰪥󰪥󰪥󰪥󰪣 96% ⟳ sep 22, 11:00". One that shares the
   # total's reset joins the group and drops its own "7d" and timestamp,
   # both of which the group already carries. One that resets at some other
   # time cannot borrow either, so it stays a segment of its own, after the

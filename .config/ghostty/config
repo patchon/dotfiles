@@ -29,9 +29,10 @@ keybind = cmd+right=text:\x1bf
 
 scrollback-limit = 50000000
 
-# The Claude Code status line draws its meters with U+25C9..U+25D5 (circle
-# glyphs). The Nerd Font renders them too small, Menlo has them at the right
-# size.
-font-codepoint-map = U+25C9-U+25D5=Menlo
+# Meslo is the Nerd Font build of Menlo, so Linux and macOS render the same.
+# The Claude Code status line draws its meters with Nerd Font glyphs, which
+# come from the primary font and are not rescaled like fallback faces.
+# On macOS: brew install --cask font-meslo-lg-nerd-font
+font-family = MesloLGS Nerd Font Mono
 
 link-previews = false
