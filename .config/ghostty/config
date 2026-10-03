@@ -36,3 +36,5 @@ scrollback-limit = 50000000
 font-family = MesloLGS Nerd Font Mono
 
 link-previews = false
+
+shell-integration-features = ssh-env,ssh-terminfo
