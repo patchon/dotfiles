@@ -1,24 +1,15 @@
 {
-  "model": "fable[1m]",
-  "effortLevel": "xhigh",
   "env": {
     "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000",
     "BASH_MAX_OUTPUT_LENGTH": "15000"
   },
-  "tui": "fullscreen",
-  "editorMode": "normal",
-  "verbose": true,
-  "agentPushNotifEnabled": true,
-  "autoUpdatesChannel": "latest",
-  "skipAutoPermissionPrompt": true,
-  "skipWorkflowUsageWarning": true,
+  "model": "fable[1m]",
   "statusLine": {
     "type": "command",
     "command": "bash ~/.claude/scripts/statusline.sh",
     "refreshInterval": 1
   },
   "enabledPlugins": {
-    "superpowers-extended-cc@superpowers-extended-cc-marketplace": true,
     "chrome-devtools-mcp@chrome-devtools-plugins": true
   },
   "extraKnownMarketplaces": {
@@ -27,12 +18,14 @@
         "source": "github",
         "repo": "ChromeDevTools/chrome-devtools-mcp"
       }
-    },
-    "superpowers-extended-cc-marketplace": {
-      "source": {
-        "source": "github",
-        "repo": "pcvelz/superpowers"
-      }
     }
-  }
+  },
+  "effortLevel": "xhigh",
+  "autoUpdatesChannel": "latest",
+  "tui": "fullscreen",
+  "skipWorkflowUsageWarning": true,
+  "editorMode": "normal",
+  "verbose": true,
+  "agentPushNotifEnabled": true,
+  "skipAutoPermissionPrompt": true
 }
