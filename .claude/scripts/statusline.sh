@@ -34,10 +34,13 @@
 #     window with its own reset, then the weekly total, then every
 #     per-model weekly limit that shares the total's reset, with that
 #     reset shown once at the end. The weekly resets are the same instant
-#     in practice, so repeating them wasted a third of the segment. A
-#     per-model limit that resets at some other time is left out of the
-#     group and gets its own │-separated segment carrying its own reset,
-#     so a divergence shows up rather than being hidden by the grouping.
+#     in practice, so repeating them wasted a third of the segment. The
+#     API reports that instant up to a second apart per limit, sometimes
+#     either side of a minute, so "shares" means within RESET_FOLD_WINDOW
+#     seconds, not the same printed minute. A per-model limit that resets
+#     at some other time is left out of the group and gets its own
+#     │-separated segment carrying its own reset, so a divergence shows up
+#     rather than being hidden by the grouping.
 #     A window that neither stdin nor the API reports is left out and the
 #     group opens with the next one: as of november 2026 the API answers
 #     with a null 5h window for this account, so the group starts at 7d.
@@ -86,6 +89,7 @@ set -f
 readonly CACHE_DIR="${CLAUDE_STATUSLINE_CACHE_DIR:-/tmp/claude}"
 readonly OUTPUT_CACHE_TTL=60  # seconds between re-renders, per session
 readonly USAGE_CACHE_TTL=60   # seconds between usage API calls, shared
+readonly RESET_FOLD_WINDOW=300  # resets this close count as one, seconds
 readonly USAGE_API_URL='https://api.anthropic.com/api/oauth/usage'
 readonly USAGE_API_USER_AGENT='claude-code/2.1.34'
 readonly KEYCHAIN_SERVICE='Claude Code-credentials'
@@ -648,6 +652,23 @@ cache_segment() {
 }
 
 #######################################
+# Test whether two resets count as the same instant: both are numbers and
+# at most RESET_FOLD_WINDOW seconds apart. Comparing printed minutes is not
+# enough, since one limit can reset at 12:59:59.9 and the next at 13:00:00.3.
+# Globals:
+#   RESET_FOLD_WINDOW
+# Arguments:
+#   Two epoch seconds. A fractional part is ignored.
+# Returns:
+#   0 if they count as one reset, 1 otherwise.
+#######################################
+same_reset() {
+  local a=${1%%.*} b=${2%%.*}
+  [[ "${a}" =~ ^[0-9]+$ && "${b}" =~ ^[0-9]+$ ]] || return 1
+  (( (a > b ? a - b : b - a) <= RESET_FOLD_WINDOW ))
+}
+
+#######################################
 # Render the "󰑐 <time>" reset marker, with its leading space. Kept apart
 # from limit_segment so a group of limits sharing one reset can print it
 # once, after its last member.
@@ -897,8 +918,9 @@ render_line() {
 
   # Per-model weekly limits, e.g. the "· fable 󰪥󰪥󰪥󰪥󰪣 96%" in
   # "7d 󰪥󰪥󰪣󰝦󰝦 57% · fable 󰪥󰪥󰪥󰪥󰪣 96% 󰑐 sep 22, 11:00". One that shares the
-  # total's reset joins the group and drops its own "7d" and timestamp,
-  # both of which the group already carries. One that resets at some other
+  # total's reset, within RESET_FOLD_WINDOW, joins the group and drops its
+  # own "7d" and timestamp, both of which the group already carries, and
+  # the group's timestamp is the total's. One that resets at some other
   # time cannot borrow either, so it stays a segment of its own, after the
   # group, fully labelled.
   if [[ -n "${scoped_limits}" ]]; then
@@ -910,8 +932,8 @@ render_line() {
       if reset_epoch=$(iso_to_epoch "${reset_iso}"); then
         reset_text=$(format_epoch_time "${reset_epoch}" datetime)
       fi
-      if [[ -n "${weekly_group}" && -n "${reset_text}" \
-          && "${reset_text}" == "${seven_day_reset_text}" ]]; then
+      if [[ -n "${weekly_group}" && -n "${reset_text}" ]] \
+          && same_reset "${reset_epoch}" "${seven_day_reset_epoch}"; then
         weekly_group+="${GROUP_SEP}$(limit_segment "${name}" "${pct}" '')"
       else
         weekly_extra+="${SEP}$(limit_segment "7d ${name}" "${pct}" \
