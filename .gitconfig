@@ -15,7 +15,11 @@
 [core]
   autocrlf       = input
   editor         = vim
-  fsmonitor      = true
+  # Off: the daemon crawls every directory of a worktree at start, ignored
+  # ones included, so a Rust target/ of 26k directories costs seconds on the
+  # first git command after a boot. It pays off from ~100k tracked files; no
+  # repo of mine is near that, and untrackedCache already makes status fast.
+  fsmonitor      = false
   untrackedCache = true
   whitespace     = cr-at-eol
 
