@@ -38,6 +38,9 @@
 #     per-model limit that resets at some other time is left out of the
 #     group and gets its own │-separated segment carrying its own reset,
 #     so a divergence shows up rather than being hidden by the grouping.
+#     A window that neither stdin nor the API reports is left out and the
+#     group opens with the next one: as of november 2026 the API answers
+#     with a null 5h window for this account, so the group starts at 7d.
 #   - Everything on the line is rendered in lower case, whatever the
 #     source spells: "Fable 5.1" from stdin, "Fable" from the usage API
 #     and a branch such as "Feature-X" all print lower case. to_lower is
@@ -396,8 +399,12 @@ get_usage_data() {
       -H 'anthropic-beta: oauth-2025-04-20' \
       -H "User-Agent: ${USAGE_API_USER_AGENT}" \
       "${USAGE_API_URL}" 2>/dev/null)
+    # A usable reply has at least one window. Any of them may be null, the
+    # 5h one included, so none is required on its own.
     if [[ -n "${response}" ]] \
-        && jq -e '.five_hour' <<< "${response}" >/dev/null 2>&1; then
+        && jq -e '.five_hour != null or .seven_day != null
+                  or ((.limits // []) | length) > 0' \
+          <<< "${response}" >/dev/null 2>&1; then
       printf '%s\n' "${response}" > "${cache_file}"
       printf '%s' "${response}"
       return 0
@@ -732,7 +739,7 @@ render_line() {
     cache_expires exceeds_200k fast_mode parent_cmd
   local current_tokens context_pct=0 pct_color line git_seg duration \
     cache_seg tail_seg=''
-  local has_stdin_rates=false five_hour_pct='' five_hour_reset_epoch='' \
+  local five_hour_pct='' five_hour_reset_epoch='' \
     seven_day_pct='' seven_day_reset_epoch='' seven_day_reset_text='' \
     reset_text reset_epoch limits_group='' weekly_group='' \
     weekly_extra=''
@@ -814,14 +821,15 @@ render_line() {
 
   # Rate limits: stdin is primary because it is fresher. The usage API is
   # still fetched, because per-model weekly limits and extra usage only
-  # exist there.
+  # exist there. Each window stands on its own: Claude Code drops one from
+  # stdin once it has reset, and the API reports null for a window the
+  # account does not have, so neither is a condition for the other.
   if has_value "${five_hour_used}"; then
-    has_stdin_rates=true
     printf -v five_hour_pct '%.0f' "${five_hour_used}" 2>/dev/null
     five_hour_reset_epoch="${five_hour_resets}"
-    if has_value "${seven_day_used}"; then
-      printf -v seven_day_pct '%.0f' "${seven_day_used}" 2>/dev/null
-    fi
+  fi
+  if has_value "${seven_day_used}"; then
+    printf -v seven_day_pct '%.0f' "${seven_day_used}" 2>/dev/null
     seven_day_reset_epoch="${seven_day_resets}"
   fi
 
@@ -837,17 +845,16 @@ render_line() {
         (.extra_usage.is_enabled // false)
       ] | map(tostring) | join($sep)' <<< "${usage_data}" 2>/dev/null
     )
-    # Use the API's 5h/7d totals only when stdin did not provide them.
-    if [[ "${has_stdin_rates}" == false \
-        && -n "${api_five_hour_used}" ]]; then
+    # The API fills in a window that stdin did not provide. Absent rather
+    # than zero: a reply without a window prints no segment for it, not a
+    # full-looking one reading 0%.
+    if [[ -z "${five_hour_pct}" && -n "${api_five_hour_used}" ]]; then
       printf -v five_hour_pct '%.0f' "${api_five_hour_used}" 2>/dev/null
       five_hour_reset_epoch=$(iso_to_epoch "${api_five_hour_resets}")
-      # Absent rather than zero: a response without a weekly total should
-      # print no 7d segment, not a full-looking one reading 0%.
-      if [[ -n "${api_seven_day_used}" ]]; then
-        printf -v seven_day_pct '%.0f' "${api_seven_day_used}" 2>/dev/null
-        seven_day_reset_epoch=$(iso_to_epoch "${api_seven_day_resets}")
-      fi
+    fi
+    if [[ -z "${seven_day_pct}" && -n "${api_seven_day_used}" ]]; then
+      printf -v seven_day_pct '%.0f' "${api_seven_day_used}" 2>/dev/null
+      seven_day_reset_epoch=$(iso_to_epoch "${api_seven_day_resets}")
     fi
 
     # Per-model weekly limits. Prefer limits[] entries of kind weekly_scoped
@@ -872,15 +879,16 @@ render_line() {
     ' <<< "${usage_data}" 2>/dev/null)
   fi
 
-  # The 5h window opens the limits group. It keeps its own reset, which is
-  # a different instant from the weekly one and so cannot be shared.
+  # The 5h window, when there is one, opens the limits group. It keeps its
+  # own reset, which is a different instant from the weekly one and so
+  # cannot be shared.
   if [[ -n "${five_hour_pct}" ]]; then
     reset_text=$(format_epoch_time "${five_hour_reset_epoch}" time)
     limits_group=$(limit_segment '5h' "${five_hour_pct}" "${reset_text}")
   fi
-  # The weekly total continues the group after the 5h window. Its reset is
-  # printed after the last member, not here, because the per-model weekly
-  # limits that follow share it.
+  # The weekly total follows the 5h window, or opens the group when there
+  # was none. Its reset is printed after the last member, not here, because
+  # the per-model weekly limits that follow share it.
   if [[ -n "${seven_day_pct}" ]]; then
     seven_day_reset_text=$(format_epoch_time "${seven_day_reset_epoch}" \
       datetime)
