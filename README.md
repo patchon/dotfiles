@@ -62,6 +62,14 @@ own dialog the first time ssh needs it. So the check asks the ssh-agent behind
 the wrapper, on the sibling `.ssh` socket, and those keys are added at shell
 start like everywhere else.
 
+Only the desktop session is handed that `SSH_AUTH_SOCK`: gcr-ssh-agent runs
+under the user's systemd, and a shell that sshd starts gets no agent at all.
+`setup_ssh_agent` therefore looks for the gcr sockets under `XDG_RUNTIME_DIR`
+before it starts a private agent, and picks the `.ssh` one, so that a key the
+agent does not hold yet is asked for in the terminal and not in a dialog on a
+screen the remote shell cannot see. Keys unlocked at the desk are then already
+there when logging in over ssh, and the other way round.
+
 For gpg it is `unlock_gpg_keys`. There is no `ssh-add` for gpg: the agent
 reads a private key only when some operation needs it, so the function makes
 one up per key, a throwaway signature or a decrypt of something it just

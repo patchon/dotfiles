@@ -76,16 +76,36 @@ ssh_agent_alive() {
 
 #######################################
 # Make sure an ssh-agent is reachable through SSH_AUTH_SOCK. An agent that
-# already answers (launchd on macOS, systemd or gnome-keyring on linux) is
-# kept. Otherwise a private agent on a fixed socket is reused or started, so
+# already answers (launchd on macOS, a forwarded or desktop agent on linux)
+# is kept.
+#
+# Otherwise GNOME's agent is looked for. gcr-ssh-agent runs under the user's
+# systemd, whose socket unit publishes SSH_AUTH_SOCK to the desktop session
+# and nowhere else: a shell that sshd starts does not get it, and would
+# otherwise start an agent of its own and ask for every passphrase again.
+# The wrapper loads a key it does not hold through a dialog on the desktop,
+# which a remote shell cannot see, so the ssh-agent behind it is used
+# instead, on the sibling .ssh socket. That socket exists only once the
+# wrapper has started, which the first connection to it takes care of.
+#
+# Failing both, a private agent on a fixed socket is reused or started, so
 # that every shell shares one agent.
 # Globals:
-#   SSH_AUTH_SOCK, SSH_AGENT_PID
+#   HOME, SSH_AUTH_SOCK, SSH_AGENT_PID, UID, XDG_RUNTIME_DIR
 #######################################
 setup_ssh_agent() {
   local sock="${HOME}/.ssh/ssh-agent.sock"
+  local gcr="${XDG_RUNTIME_DIR:-/run/user/${UID}}/gcr"
 
   [[ -n "${SSH_AUTH_SOCK}" ]] && ssh_agent_alive && return 0
+
+  if [[ -S "${gcr}/ssh" ]]; then
+    export SSH_AUTH_SOCK="${gcr}/ssh"
+    if ssh_agent_alive; then
+      [[ -S "${gcr}/.ssh" ]] && export SSH_AUTH_SOCK="${gcr}/.ssh"
+      return 0
+    fi
+  fi
 
   if [[ -S "${sock}" ]]; then
     export SSH_AUTH_SOCK="${sock}"
