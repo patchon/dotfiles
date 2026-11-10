@@ -1,6 +1,14 @@
 [alias]
   b       = branch -vv
-  co      = "!f() { git switch \"$1\" 2>/dev/null || git switch -c \"$1\"; }; f"
+  # Switch to a branch, creating it only when no local or remote branch has
+  # that name. A switch that fails for another reason shows its own error.
+  co      = "!f() { \
+    case \"$1\" in ''|-*) ;; *) \
+      git show-ref --verify --quiet \"refs/heads/$1\" \
+        || [ -n \"$(git for-each-ref \"refs/remotes/*/$1\")\" ] \
+        || set -- -c \"$@\";; \
+    esac; \
+    git switch \"$@\"; }; f"
   commit  = commit -v
   st      = status
   unstage = reset HEAD --
