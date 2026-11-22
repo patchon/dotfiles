@@ -76,8 +76,18 @@ start another one while that file is there, though the wrapper itself goes on
 answering. `wake_gcr_ssh_agent` notices a `.ssh` socket that nothing listens
 on, removes it and asks the wrapper again, which starts a new agent; a shell
 on the desktop does the same. If no agent comes back, the shell gets the
-private one. `tests/ssh_agent_test.sh` runs these cases against real agents,
-in a `HOME` of their own under `/tmp`.
+private one.
+
+Shells that start at the same moment take turns at replacing a dead agent or
+starting the private one: the second would otherwise remove the socket the
+first had just put an agent on. `with_lock_on` does that with an `flock` on
+the directory the socket is in, which leaves nothing behind, and a shell that
+has waited ten seconds for it goes ahead anyway. Where there is no `flock`, as
+on macOS, nothing is locked.
+
+`tests/ssh_agent_test.sh` runs these cases against real agents, in a `HOME` of
+their own under `/tmp`, and `tests/ssh_agent_test.sh together` only those whose
+name has that word in it.
 
 For gpg it is `unlock_gpg_keys`. There is no `ssh-add` for gpg: the agent
 reads a private key only when some operation needs it, so the function makes

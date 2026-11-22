@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2329  # cases define functions that .bashrc's call
 #
 # Tests for the ssh-agent functions of .bashrc, run against real agents:
 #
-#   tests/ssh_agent_test.sh
+#   tests/ssh_agent_test.sh             every case
+#   tests/ssh_agent_test.sh together    the cases with that in their name
 #
 # Every case gets a HOME and an XDG_RUNTIME_DIR of its own under /tmp, so the
 # agents and keys of whoever runs this are never touched. The case that needs
@@ -15,6 +17,7 @@ repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 readonly repo
 readonly bashrc="${repo}/.bashrc"
 readonly skipped=77
+readonly shells=8  # how many start at the same moment in the cases about that
 
 #######################################
 # Print the path of gcr-ssh-agent, which distributions install in different
@@ -150,6 +153,57 @@ new_case() {
   mkdir -p "${HOME}" "${gcr}"
 }
 
+#######################################
+# Run setup_ssh_agent in several shells that start at the same moment, and
+# keep the socket each one ended up on. The shells spin on a file until all
+# of them are there, since started one after the other they would be
+# milliseconds apart.
+#
+# Shells that do not take turns undo each other when one removes the socket
+# another has just put an agent on. Left to chance that takes a window of
+# under a millisecond, so each shell here is slower than the one before at
+# removing a file, which makes it happen every time.
+# Globals:
+#   HOME, shells
+#######################################
+start_shells_together() {
+  local i dir="${HOME}/shells" pids=()
+  command -v flock > /dev/null || skip 'no flock here: shells do not take turns'
+  mkdir "${dir}"
+  for (( i = 0; i < shells; i++ )); do
+    (
+      rm() {
+        sleep "$(printf '0.%02d' "$(( i * 5 ))")"
+        command rm "$@"
+      }
+      until [[ -e "${dir}/go" ]]; do :; done
+      setup_ssh_agent
+      printenv SSH_AUTH_SOCK > "${dir}/${i}"
+    ) &
+    pids+=("$!")
+  done
+  : > "${dir}/go"
+  wait "${pids[@]}"
+}
+
+#######################################
+# Check that every one of those shells ended up on the socket, that an agent
+# answers there, and that it is the only one: an agent whose socket another
+# shell removed runs on where nothing can reach it.
+# Arguments:
+#   Socket
+#######################################
+expect_every_shell_on_one_agent() {
+  local i sock agents
+  for (( i = 0; i < shells; i++ )); do
+    sock=$(< "${HOME}/shells/${i}")
+    [[ "${sock}" == "$1" ]] || fail "shell ${i} ended up on '${sock}', expected '$1'"
+  done
+  answers "$1" || fail "no agent answers on $1"
+  agents=$(pgrep -u "${UID}" -f -- "$1" | wc -l)
+  (( agents == 1 )) || fail "${agents} agents were started for $1"
+}
+
 test_keeps_an_agent_that_already_answers() {
   start_agent "${HOME}/forwarded.sock"
   export SSH_AUTH_SOCK="${HOME}/forwarded.sock"
@@ -238,6 +292,54 @@ test_starts_a_private_agent_from_nothing() {
     || fail "${HOME}/.ssh is open to others"
 }
 
+# OpenSSH's agent closes what it inherits, so this takes a program that does
+# not: one that kept the lock would hold it for as long as it runs.
+test_a_program_started_under_the_lock_does_not_keep_it() {
+  command -v flock > /dev/null || skip 'no flock here: nothing is locked'
+  start_a_program() { sleep 5 & }
+
+  with_lock_on "${HOME}" start_a_program
+
+  flock -n "${HOME}" true \
+    || fail 'the lock is still held: the program inherited it'
+  kill "$!"
+}
+
+test_the_command_under_the_lock_runs_in_this_shell_and_keeps_its_status() {
+  set_a_variable() {
+    seen=here
+    return 3
+  }
+
+  with_lock_on "${HOME}" set_a_variable
+
+  (( $? == 3 )) || fail 'the status of the command was lost'
+  [[ "${seen}" == here ]] || fail 'the command ran in another shell'
+}
+
+test_shells_starting_together_share_one_new_private_agent() {
+  start_shells_together
+
+  expect_every_shell_on_one_agent "${private}"
+}
+
+test_shells_starting_together_replace_a_dead_private_socket_once() {
+  mkdir -m 0700 "${HOME}/.ssh"
+  leave_dead_socket "${private}"
+
+  start_shells_together
+
+  expect_every_shell_on_one_agent "${private}"
+}
+
+test_shells_starting_together_bring_gnomes_agent_back_once() {
+  kill_the_agent_behind_gnomes_wrapper
+
+  start_shells_together
+
+  expect_every_shell_on_one_agent "${gcr}/.ssh"
+}
+
 #######################################
 # Run one case in a subshell and report it. The output goes to a file, not
 # through a pipe: an agent that inherited a pipe would keep it open.
@@ -285,13 +387,13 @@ main() {
 
   # .bashrc cannot be sourced here: it returns at once in a shell that is not
   # interactive, and in one that is it runs everything. Its functions start
-  # and end in the first column, so the ones about the agent are cut out.
-  functions=$(sed -n '/^[a-z_]*ssh_agent[a-z_]*() {$/,/^}$/p' "${bashrc}")
-  [[ -n "${functions}" ]] || { echo "no ssh-agent functions in ${bashrc}" >&2; exit 1; }
+  # and end in the first column, so they are cut out and nothing else is.
+  functions=$(sed -n '/^[a-z_][a-z0-9_]*() {$/,/^}$/p' "${bashrc}")
+  [[ -n "${functions}" ]] || { echo "no functions in ${bashrc}" >&2; exit 1; }
   eval "${functions}"
 
   for name in $(compgen -A function test_); do
-    run_case "${name}"
+    [[ "${name}" == *"${1:-}"* ]] && run_case "${name}"
   done
 
   echo "${passed} passed, ${failed} failed, ${skips} skipped"

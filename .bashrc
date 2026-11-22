@@ -77,6 +77,71 @@ ssh_agent_alive() {
 }
 
 #######################################
+# Run a command in this shell while holding a lock on a directory, so that
+# shells doing the same thing at the same moment take turns.
+#
+# The lock is flock's and sits on a file descriptor of this shell. The
+# kernel drops it when the descriptor is closed or the shell dies, so no
+# lock is ever left behind, and nothing is written to the directory. The
+# descriptor is closed for the command itself: a program the command starts
+# would otherwise inherit it, and an agent that runs for weeks would hold
+# the lock for as long. A shell waits ten seconds for the lock and then
+# goes ahead without it, and where there is no flock, as on macOS, the
+# command simply runs.
+# Arguments:
+#   Directory to lock, then the command and its arguments
+# Returns:
+#   The command's exit status
+#######################################
+with_lock_on() {
+  local dir="$1" lock status
+  shift
+
+  if ! command -v flock > /dev/null \
+    || ! { exec {lock}< "${dir}"; } 2> /dev/null; then
+    "$@"
+    return
+  fi
+  flock -w 10 "${lock}"
+  "$@" {lock}<&-
+  status=$?
+  exec {lock}<&-
+  return "${status}"
+}
+
+#######################################
+# Start an ssh-agent on a socket.
+# Globals:
+#   SSH_AUTH_SOCK, SSH_AGENT_PID
+# Arguments:
+#   Socket
+#######################################
+start_ssh_agent() {
+  eval "$(ssh-agent -s -a "$1")" > /dev/null
+}
+
+#######################################
+# Put a new agent on a socket that no agent answers on: remove the file a
+# dead agent left there, and run the command that starts one.
+#
+# This runs under with_lock_on. Two shells doing it at once undo each other:
+# the second removes the socket the first has just put an agent on, or both
+# start an agent on the same path and one of them is left without. An agent
+# that does answer is left alone, which is what the second shell finds when
+# its turn comes.
+# Arguments:
+#   Socket, then the command that starts an agent on it and its arguments
+#######################################
+replace_dead_ssh_agent() {
+  local sock="$1"
+  shift
+
+  ssh_agent_alive "${sock}" && return 0
+  rm -f "${sock}"
+  "$@"
+}
+
+#######################################
 # Make the ssh-agent behind gcr-ssh-agent, GNOME's wrapper, answer on its
 # .ssh socket. The wrapper starts that agent on the first connection it
 # gets, so the wrapper is asked first.
@@ -85,8 +150,8 @@ ssh_agent_alive() {
 # start another one while the file is there: ssh-agent does not bind to a
 # path that exists. The wrapper itself goes on answering, so every shell
 # would be pointed at a socket that nothing listens on. A socket that is
-# silent after the wrapper answered is therefore removed, like the private
-# one in setup_ssh_agent, and the wrapper is asked once more.
+# silent after the wrapper answered is therefore replaced: the file is
+# removed and the wrapper asked once more, which starts a new agent.
 # Arguments:
 #   Directory of gcr-ssh-agent's ssh and .ssh sockets
 # Returns:
@@ -99,8 +164,8 @@ wake_gcr_ssh_agent() {
   ssh_agent_alive "${wrapper}" || return 1
   ssh_agent_alive "${agent}" && return 0
 
-  rm -f "${agent}"  # stale socket from a killed agent
-  ssh_agent_alive "${wrapper}"
+  with_lock_on "$1" \
+    replace_dead_ssh_agent "${agent}" ssh_agent_alive "${wrapper}"
   ssh_agent_alive "${agent}"
 }
 
@@ -120,7 +185,7 @@ wake_gcr_ssh_agent() {
 #
 # Failing both, or when the agent behind the wrapper cannot be woken, a
 # private agent on a fixed socket is reused or started, so that every shell
-# shares one agent.
+# shares one agent. Shells that start together take turns at starting it.
 # Globals:
 #   HOME, SSH_AUTH_SOCK, SSH_AGENT_PID, UID, XDG_RUNTIME_DIR
 #######################################
@@ -138,14 +203,14 @@ setup_ssh_agent() {
     return 0
   fi
 
-  if [[ -S "${sock}" ]]; then
-    export SSH_AUTH_SOCK="${sock}"
-    ssh_agent_alive && return 0
-    rm -f "${sock}"  # stale socket from a dead agent
+  if ! ssh_agent_alive "${sock}"; then
+    # -p for two shells getting here together; only .ssh is ever missing.
+    # shellcheck disable=SC2174
+    [[ -d "${HOME}/.ssh" ]] || mkdir -p -m 0700 "${HOME}/.ssh"
+    with_lock_on "${HOME}/.ssh" \
+      replace_dead_ssh_agent "${sock}" start_ssh_agent "${sock}"
   fi
-
-  [[ -d "${HOME}/.ssh" ]] || mkdir -m 0700 "${HOME}/.ssh"
-  eval "$(ssh-agent -s -a "${sock}")" > /dev/null
+  export SSH_AUTH_SOCK="${sock}"
 }
 
 #######################################
