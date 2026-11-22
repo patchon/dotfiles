@@ -62,22 +62,53 @@ setup_homebrew() {
 }
 
 #######################################
-# Check whether an ssh-agent answers on SSH_AUTH_SOCK. ssh-add -l exits 0
-# (keys loaded), 1 (no keys) or 2 (no agent).
+# Check whether an ssh-agent answers on a socket. ssh-add -l exits 0 (keys
+# loaded), 1 (no keys) or 2 (no agent).
 # Globals:
 #   SSH_AUTH_SOCK
+# Arguments:
+#   Socket to ask, SSH_AUTH_SOCK when left out
 # Returns:
 #   0 if an agent answers, 1 otherwise
 #######################################
 ssh_agent_alive() {
-  ssh-add -l &> /dev/null
+  SSH_AUTH_SOCK="${1:-${SSH_AUTH_SOCK}}" ssh-add -l &> /dev/null
   (( $? != 2 ))
+}
+
+#######################################
+# Make the ssh-agent behind gcr-ssh-agent, GNOME's wrapper, answer on its
+# .ssh socket. The wrapper starts that agent on the first connection it
+# gets, so the wrapper is asked first.
+#
+# An agent that is killed leaves its socket behind, and the wrapper cannot
+# start another one while the file is there: ssh-agent does not bind to a
+# path that exists. The wrapper itself goes on answering, so every shell
+# would be pointed at a socket that nothing listens on. A socket that is
+# silent after the wrapper answered is therefore removed, like the private
+# one in setup_ssh_agent, and the wrapper is asked once more.
+# Arguments:
+#   Directory of gcr-ssh-agent's ssh and .ssh sockets
+# Returns:
+#   0 if the agent on the .ssh socket answers, 1 otherwise
+#######################################
+wake_gcr_ssh_agent() {
+  local wrapper="$1/ssh" agent="$1/.ssh"
+
+  [[ -S "${wrapper}" ]] || return 1
+  ssh_agent_alive "${wrapper}" || return 1
+  ssh_agent_alive "${agent}" && return 0
+
+  rm -f "${agent}"  # stale socket from a killed agent
+  ssh_agent_alive "${wrapper}"
+  ssh_agent_alive "${agent}"
 }
 
 #######################################
 # Make sure an ssh-agent is reachable through SSH_AUTH_SOCK. An agent that
 # already answers (launchd on macOS, a forwarded or desktop agent on linux)
-# is kept.
+# is kept. On GNOME's desktop that is the wrapper, which answers with or
+# without the agent behind it, so that one is woken as well.
 #
 # Otherwise GNOME's agent is looked for. gcr-ssh-agent runs under the user's
 # systemd, whose socket unit publishes SSH_AUTH_SOCK to the desktop session
@@ -85,11 +116,11 @@ ssh_agent_alive() {
 # otherwise start an agent of its own and ask for every passphrase again.
 # The wrapper loads a key it does not hold through a dialog on the desktop,
 # which a remote shell cannot see, so the ssh-agent behind it is used
-# instead, on the sibling .ssh socket. That socket exists only once the
-# wrapper has started, which the first connection to it takes care of.
+# instead, on the sibling .ssh socket.
 #
-# Failing both, a private agent on a fixed socket is reused or started, so
-# that every shell shares one agent.
+# Failing both, or when the agent behind the wrapper cannot be woken, a
+# private agent on a fixed socket is reused or started, so that every shell
+# shares one agent.
 # Globals:
 #   HOME, SSH_AUTH_SOCK, SSH_AGENT_PID, UID, XDG_RUNTIME_DIR
 #######################################
@@ -97,14 +128,14 @@ setup_ssh_agent() {
   local sock="${HOME}/.ssh/ssh-agent.sock"
   local gcr="${XDG_RUNTIME_DIR:-/run/user/${UID}}/gcr"
 
-  [[ -n "${SSH_AUTH_SOCK}" ]] && ssh_agent_alive && return 0
+  if [[ -n "${SSH_AUTH_SOCK}" ]] && ssh_agent_alive; then
+    [[ "${SSH_AUTH_SOCK}" == "${gcr}/ssh" ]] && wake_gcr_ssh_agent "${gcr}"
+    return 0
+  fi
 
-  if [[ -S "${gcr}/ssh" ]]; then
-    export SSH_AUTH_SOCK="${gcr}/ssh"
-    if ssh_agent_alive; then
-      [[ -S "${gcr}/.ssh" ]] && export SSH_AUTH_SOCK="${gcr}/.ssh"
-      return 0
-    fi
+  if wake_gcr_ssh_agent "${gcr}"; then
+    export SSH_AUTH_SOCK="${gcr}/.ssh"
+    return 0
   fi
 
   if [[ -S "${sock}" ]]; then

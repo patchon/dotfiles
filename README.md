@@ -15,6 +15,7 @@ between machines. Added two decades after everyone else.
 | `.config/zed/` | Zed editor settings and keymap |
 | `.claude/` | Claude Code: shared settings, the status line, and the script that syncs them |
 | `install.sh` | Links all of the above into `$HOME` |
+| `tests/` | Tests for the ssh-agent functions of `.bashrc` |
 
 ## Install
 
@@ -69,6 +70,14 @@ before it starts a private agent, and picks the `.ssh` one, so that a key the
 agent does not hold yet is asked for in the terminal and not in a dialog on a
 screen the remote shell cannot see. Keys unlocked at the desk are then already
 there when logging in over ssh, and the other way round.
+
+An ssh-agent that is killed leaves its socket behind, and gcr-ssh-agent cannot
+start another one while that file is there, though the wrapper itself goes on
+answering. `wake_gcr_ssh_agent` notices a `.ssh` socket that nothing listens
+on, removes it and asks the wrapper again, which starts a new agent; a shell
+on the desktop does the same. If no agent comes back, the shell gets the
+private one. `tests/ssh_agent_test.sh` runs these cases against real agents,
+in a `HOME` of their own under `/tmp`.
 
 For gpg it is `unlock_gpg_keys`. There is no `ssh-add` for gpg: the agent
 reads a private key only when some operation needs it, so the function makes
