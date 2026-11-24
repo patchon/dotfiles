@@ -275,6 +275,70 @@ test_reuses_the_private_agent() {
   [[ -z "${SSH_AGENT_PID}" ]] || fail 'a second agent was started'
 }
 
+# A private agent runs where a shell started with no desktop to ask: after a
+# boot, before anyone signed in. What started then (tmux, and what runs in
+# it) holds on to that agent, so a shell on the desktop joins it rather than
+# unlock the same key a second time in GNOME's.
+test_prefers_a_running_private_agent_to_gnomes_on_the_desktop() {
+  mkdir -m 0700 "${HOME}/.ssh"
+  start_agent "${private}"
+  start_agent "${gcr}/ssh"  # stands in for the wrapper
+  start_agent "${gcr}/.ssh"
+  export SSH_AUTH_SOCK="${gcr}/ssh"  # what the desktop session hands out
+
+  setup_ssh_agent
+
+  expect_agent_on "${private}"
+}
+
+test_prefers_a_running_private_agent_to_gnomes_in_a_remote_shell() {
+  mkdir -m 0700 "${HOME}/.ssh"
+  start_agent "${private}"
+  start_agent "${gcr}/ssh"
+  start_agent "${gcr}/.ssh"
+
+  setup_ssh_agent
+
+  expect_agent_on "${private}"
+}
+
+test_prefers_a_running_private_agent_in_a_shell_started_from_one_on_gnomes() {
+  mkdir -m 0700 "${HOME}/.ssh"
+  start_agent "${private}"
+  start_agent "${gcr}/ssh"
+  start_agent "${gcr}/.ssh"
+  export SSH_AUTH_SOCK="${gcr}/.ssh"  # inherited from a remote shell
+
+  setup_ssh_agent
+
+  expect_agent_on "${private}"
+}
+
+# A forwarded agent holds the keys of the machine the user came from, and
+# launchd's is the one macOS means: neither is GNOME's, and both are kept.
+test_keeps_a_forwarded_agent_while_a_private_one_runs() {
+  mkdir -m 0700 "${HOME}/.ssh"
+  start_agent "${private}"
+  start_agent "${HOME}/forwarded.sock"
+  export SSH_AUTH_SOCK="${HOME}/forwarded.sock"
+
+  setup_ssh_agent
+
+  expect_agent_on "${HOME}/forwarded.sock"
+}
+
+test_a_dead_private_socket_does_not_take_a_shell_off_gnomes_agent() {
+  mkdir -m 0700 "${HOME}/.ssh"
+  leave_dead_socket "${private}"
+  start_agent "${gcr}/ssh"
+  start_agent "${gcr}/.ssh"
+  export SSH_AUTH_SOCK="${gcr}/ssh"
+
+  setup_ssh_agent
+
+  expect_agent_on "${gcr}/ssh"
+}
+
 test_replaces_a_dead_private_socket() {
   mkdir -m 0700 "${HOME}/.ssh"
   leave_dead_socket "${private}"

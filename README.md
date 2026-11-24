@@ -71,6 +71,15 @@ agent does not hold yet is asked for in the terminal and not in a dialog on a
 screen the remote shell cannot see. Keys unlocked at the desk are then already
 there when logging in over ssh, and the other way round.
 
+A private agent that is already running comes first, before GNOME's. It was
+started where there was no desktop to ask: after a boot and before anyone
+signed in, when gcr-ssh-agent is not up yet. A tmux server started then, and
+whatever runs in it, holds on to that agent, so a shell on the desktop joins it
+rather than unlock the same key a second time in GNOME's agent, where what
+started at boot would never see it. Where no private agent runs, nothing
+changes. An agent that is neither of the two, a forwarded one or launchd's on
+macOS, is kept whatever else runs.
+
 An ssh-agent that is killed leaves its socket behind, and gcr-ssh-agent cannot
 start another one while that file is there, though the wrapper itself goes on
 answering. `wake_gcr_ssh_agent` notices a `.ssh` socket that nothing listens

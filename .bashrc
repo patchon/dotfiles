@@ -186,14 +186,36 @@ wake_gcr_ssh_agent() {
 # Failing both, or when the agent behind the wrapper cannot be woken, a
 # private agent on a fixed socket is reused or started, so that every shell
 # shares one agent. Shells that start together take turns at starting it.
+#
+# A private agent that is running comes before GNOME's, though. It was
+# started where there was no desktop to ask: after a boot, before anyone
+# signed in. What started then, such as a tmux server and what runs in it,
+# holds on to that agent for as long as it lives, and GNOME's agent comes up
+# only at the sign-in. A shell on the desktop that took GNOME's would unlock
+# the key there, and the first agent would never get it. An agent that is
+# neither, a forwarded one or launchd's, is kept as before.
 # Globals:
 #   HOME, SSH_AUTH_SOCK, SSH_AGENT_PID, UID, XDG_RUNTIME_DIR
 #######################################
 setup_ssh_agent() {
   local sock="${HOME}/.ssh/ssh-agent.sock"
   local gcr="${XDG_RUNTIME_DIR:-/run/user/${UID}}/gcr"
+  local gnomes=0
 
-  if [[ -n "${SSH_AUTH_SOCK}" ]] && ssh_agent_alive; then
+  [[ "${SSH_AUTH_SOCK}" == "${gcr}/ssh" || "${SSH_AUTH_SOCK}" == "${gcr}/.ssh" ]] \
+    && gnomes=1
+
+  if [[ -n "${SSH_AUTH_SOCK}" ]] && (( ! gnomes )) && ssh_agent_alive; then
+    return 0
+  fi
+
+  # -S first: the common case has no private socket, and costs nothing.
+  if [[ -S "${sock}" ]] && ssh_agent_alive "${sock}"; then
+    export SSH_AUTH_SOCK="${sock}"
+    return 0
+  fi
+
+  if (( gnomes )) && ssh_agent_alive; then
     [[ "${SSH_AUTH_SOCK}" == "${gcr}/ssh" ]] && wake_gcr_ssh_agent "${gcr}"
     return 0
   fi
